@@ -152,7 +152,7 @@ class SpecPlotter :
         plotAxes = None if gridSpec is None else mplplot.subplot(gridSpec)
         plotYLimits = self.computePlottingLimits()
         plotAxes.set_ylabel(r'Observed Flux (erg cm$^{-2}$ s$^{-1}$ $\rm{\AA}^{-1}$)', size='large')
-        plotAxes.set_ylim(0, plotYLimits[1])
+        #plotAxes.set_ylim(0, plotYLimits[1])
         for grism, data in self.spectralData.items():
             if data is not None :
                 grismRange = SpecPlotter.spectrumRanges[grism].to(astrounits.angstrom).value
@@ -167,9 +167,6 @@ class SpecPlotter :
                                  (increasingWavelengthData.WAVELENGTH > grismRange[0]) &
                                  (increasingWavelengthData.WAVELENGTH < fullRange[1]) &
                                  (increasingWavelengthData.WAVELENGTH > fullRange[0]))
-                #print(SpecPlotter.spectrumRanges[grism].to(astrounits.angstrom).value)
-                #grismRange = SpecPlotter.spectrumRanges[grism].to(astrounits.angstrom).value
-                #wavelengthCut = ((data.WAVELENGTH < grismRange[1]) & (data.WAVELENGTH > grismRange[0]))
 
                 plotData = increasingWavelengthData[wavelengthCut]
                 if len(plotData.index) == 0 :
