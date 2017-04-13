@@ -452,7 +452,7 @@ class StampPlotter:
                 print(subplotAxes.get_ylim(),
                       np.array(subplotAxes.get_ylim()),
                       np.array(subplotAxes.get_ylim()) * self.directHdus[grism][1]['IDCSCALE'],
-                      *np.array(subplotAxes.get_ylim()) * self.directHdus[grism][1]['IDCSCALE'])
+                      np.array(subplotAxes.get_ylim()) * self.directHdus[grism][1]['IDCSCALE'])
                 arcsecYAxis.set_ylabel('$\Delta Y$ (arcsec)')
                 mplplot.grid(color='white', ls='solid')
 

@@ -11,16 +11,19 @@ class SpecPlotter :
     spectrumLabels = {
         141: 'G141',
         102 : 'G102',
+        'Model': 'Model',
         'COMBINED': 'Combined'}
 
     spectrumColours = {
         141: 'red',
         102 : 'blue',
+        'Model' : 'green',
         'COMBINED': 'gray'}
 
     spectrumRanges = {
         141: (1100, 1700)*astrounits.nanometer,#(1075, 1700)*astrounits.nanometer,
         102 : (800, 1150)*astrounits.nanometer,#(800, 1150)*astrounits.nanometer
+        'Model' : (900,1700)*astrounits.nanometer,
         'COMBINED': (800, 1700)*astrounits.nanometer}
 
     filterPivotWavelengthsForGrism = {102 : (110, 11534.46 * astrounits.angstrom),
@@ -32,31 +35,37 @@ class SpecPlotter :
     plottedWavelengthRange = (8500, 16500) * astrounits.angstrom
 
     def __init__(self,
-                 withGrismSpectrumPathPattern = '/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/Spectra/Par{par}_G{grism}_BEAM_{object}A.dat',
-                 bothGrismSpectrumPathPattern = '/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/Spectra/Par{par}_BEAM_{object}A.dat') :
+                withGrismSpectrumPathPattern = '/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/Spectra/Par{par}_G{grism}_BEAM_{object}A.dat',
+                bothGrismSpectrumPathPattern = '/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/Spectra/Par{par}_BEAM_{object}A.dat',
+                withModelSpectrum = '/Users/johnip/z_find/bc03_models/{ModelName}') :
         self.spectrumPathPatterns = {141 : withGrismSpectrumPathPattern,
                                      102 : withGrismSpectrumPathPattern,
+                                     'Model': withModelSpectrum,
                                      'COMBINED': bothGrismSpectrumPathPattern}
         self.pipelineVersion = None
         self.targetPar = None
 
         self.spectralData = {141 : None,
                              102 : None,
+                             'Model': None,
                              'COMBINED': None}
 
-    def loadSpectralData(self, targetObject, targetPar, pipelineVersion = 6.2) :
+    def loadSpectralData(self, targetObject, targetPar, ModelName,norm, pipelineVersion = 6.2) :
         # lazy assignment of targetPar and pipelineVersion
         self.targetObject = targetObject
         self.targetPar = targetPar
         self.pipelineVersion = pipelineVersion
+        self.ModelName = ModelName
+        self.norm = norm
         # load spectral data for individual grisms
         for grism in self.spectralData.keys():
             testSpectrumPath = self.spectrumPathPatterns[grism].format(
                 pipeline_version=self.pipelineVersion,
                 par=self.targetPar,
                 grism=grism,
-                object=targetObject)
-            if os.path.isfile(testSpectrumPath) :
+                object=targetObject,
+                ModelName = self.ModelName)
+            if os.path.isfile(testSpectrumPath) and grism != 'Model':
                 self.spectralData[grism] = pd.read_csv(
                     testSpectrumPath,
                     skipinitialspace=True,
@@ -64,6 +73,14 @@ class SpecPlotter :
                     comment='#',
                     delim_whitespace=True,
                     names=['WAVELENGTH', 'FLUX', 'ERROR', 'CONTAM', 'ZEROTH']).dropna()
+            elif os.path.isfile(testSpectrumPath) :
+                self.spectralData['Model'] = pd.read_csv(testSpectrumPath,
+                                 header = 4,delim_whitespace=True,
+                                 names = ['WAVELENGTH','FLUX'])
+                self.spectralData['Model']['FLUX'] = self.spectralData['Model']['FLUX']/self.norm
+                self.spectralData['Model']['ERROR']=np.zeros(len(self.spectralData['Model']['FLUX']))
+
+
 
     def computePlottingLimits(self):
         minFluxes = []
@@ -85,7 +102,6 @@ class SpecPlotter :
         return (np.amin(minFluxes), np.amax(maxFluxes))
 
     def computeFluxForAbMagitude(self, abMagnitude, grism) :
-        # erg s−1 cm−2 Hz−1
 
         perHzUnit = astrounits.erg / astrounits.second / astrounits.Hz / astrounits.cm**2
         fluxPerHz = 10**(-2.0*(abMagnitude+48.6)/5.0)*perHzUnit
