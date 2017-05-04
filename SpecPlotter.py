@@ -69,17 +69,20 @@ class SpecPlotter:
     spectrumLabels = {
         141: 'G141',
         102: 'G102',
-        'COMBINED': 'Combined'}
+        'COMBINED': 'Combined',
+        'MODEL': 'Model'}
 
     spectrumColours = {
         141: 'red',
         102: 'blue',
-        'COMBINED': 'gray'}
+        'COMBINED': 'gray',
+        'MODEL': 'green'}
 
     spectrumRanges = {
         141: (1100, 1700) * astrounits.nanometer,  # (1075, 1700)*astrounits.nanometer,
         102: (800, 1150) * astrounits.nanometer,  # (800, 1150)*astrounits.nanometer
-        'COMBINED': (800, 1700) * astrounits.nanometer}
+        'COMBINED': (800, 1700) * astrounits.nanometer,
+        'MODEL' : (900, 1700)*astrounits.nanometer}
 
     filterPivotWavelengthsForGrism = {102: (110, 11534.46 * astrounits.angstrom),
                                       141: (160, 15370.33 * astrounits.angstrom)}
@@ -91,21 +94,26 @@ class SpecPlotter:
 
     def __init__(self,
                  withGrismSpectrumPathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/Spectra/Par{par}_G{grism}_BEAM_{object}A.dat',
-                 bothGrismSpectrumPathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/Spectra/Par{par}_BEAM_{object}A.dat'):
+                 bothGrismSpectrumPathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/Spectra/Par{par}_BEAM_{object}A.dat',
+                 modelSpectrumPathPattern='{model_name}'):
         self.spectrumPathPatterns = {141: withGrismSpectrumPathPattern,
                                      102: withGrismSpectrumPathPattern,
-                                     'COMBINED': bothGrismSpectrumPathPattern}
+                                     'COMBINED': bothGrismSpectrumPathPattern,
+                                     'MODEL': modelSpectrumPathPattern}
         self.pipelineVersion = None
         self.targetPar = None
 
         self.spectralData = {141: None,
                              102: None,
-                             'COMBINED': None}
+                             'COMBINED': None,
+                             'MODEL': None}
 
-    def loadSpectralData(self, targetObject, targetPar, pipelineVersion=6.2):
+    def loadSpectralData(self, targetObject, targetPar, bestFitModelName, bestFitModelNorm, pipelineVersion=6.2):
         # lazy assignment of targetPar and pipelineVersion
         self.targetObject = targetObject
         self.targetPar = targetPar
+        self.bestFitModelName = bestFitModelName
+        self.bestFitModelNorm = bestFitModelNorm
         self.pipelineVersion = pipelineVersion
         # load spectral data for individual grisms
         for grism in self.spectralData.keys():
@@ -113,15 +121,26 @@ class SpecPlotter:
                 pipeline_version=self.pipelineVersion,
                 par=self.targetPar,
                 grism=grism,
-                object=targetObject)
+                object=targetObject,
+                model_name=self.bestFitModelName)
+
             if os.path.isfile(testSpectrumPath):
-                self.spectralData[grism] = pd.read_csv(
-                    testSpectrumPath,
-                    skipinitialspace=True,
-                    header=None,
-                    comment='#',
-                    delim_whitespace=True,
-                    names=['WAVELENGTH', 'FLUX', 'ERROR', 'CONTAM', 'ZEROTH']).dropna()
+                if 'MODEL' in grism:
+                    self.spectralData[grism] = pd.read_csv(
+                        testSpectrumPath,
+                        header=4,
+                        delim_whitespace=True,
+                        names=['WAVELENGTH', 'FLUX']).dropna()
+                    self.spectralData[grism].FLUX /= self.bestFitModelNorm
+                    self.spectralData[grism]['ERROR'] = np.zeros_like(self.spectralData[grism].FLUX)
+                else :
+                    self.spectralData[grism] = pd.read_csv(
+                        testSpectrumPath,
+                        skipinitialspace=True,
+                        header=None,
+                        comment='#',
+                        delim_whitespace=True,
+                        names=['WAVELENGTH', 'FLUX', 'ERROR', 'CONTAM', 'ZEROTH']).dropna()
 
     def computePlottingLimits(self):
         minFluxes = []
