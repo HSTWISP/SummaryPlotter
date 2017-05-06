@@ -1,5 +1,7 @@
 import pandas as pd
 import numpy as np
+import scipy as sp
+import scipy.interpolate
 import astropy.units as astrounits
 import os
 import itertools
@@ -78,11 +80,17 @@ class SpecPlotter:
         'COMBINED': 'gray',
         'MODEL': 'green'}
 
+    spectrumMarkers = {
+        141: None,
+        102: None,
+        'COMBINED': None,
+        'MODEL': '|'}
+
     spectrumRanges = {
         141: (1100, 1700) * astrounits.nanometer,  # (1075, 1700)*astrounits.nanometer,
         102: (800, 1150) * astrounits.nanometer,  # (800, 1150)*astrounits.nanometer
         'COMBINED': (800, 1700) * astrounits.nanometer,
-        'MODEL' : (900, 1700)*astrounits.nanometer}
+        'MODEL' : (800, 1700)*astrounits.nanometer}
 
     filterPivotWavelengthsForGrism = {102: (110, 11534.46 * astrounits.angstrom),
                                       141: (160, 15370.33 * astrounits.angstrom)}
@@ -95,7 +103,7 @@ class SpecPlotter:
     def __init__(self,
                  withGrismSpectrumPathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/Spectra/Par{par}_G{grism}_BEAM_{object}A.dat',
                  bothGrismSpectrumPathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/Spectra/Par{par}_BEAM_{object}A.dat',
-                 modelSpectrumPathPattern='{model_name}'):
+                 modelSpectrumPathPattern='/Volumes/ramon2_wisps/z_estimates/bc03_models/{model_name}'):
         self.spectrumPathPatterns = {141: withGrismSpectrumPathPattern,
                                      102: withGrismSpectrumPathPattern,
                                      'COMBINED': bothGrismSpectrumPathPattern,
@@ -108,7 +116,7 @@ class SpecPlotter:
                              'COMBINED': None,
                              'MODEL': None}
 
-    def loadSpectralData(self, targetObject, targetPar, bestFitModelName, bestFitModelNorm, pipelineVersion=6.2):
+    def loadSpectralData(self, targetObject, targetPar, bestFitModelName = None, bestFitModelNorm = None, pipelineVersion=6.2):
         # lazy assignment of targetPar and pipelineVersion
         self.targetObject = targetObject
         self.targetPar = targetPar
@@ -125,10 +133,11 @@ class SpecPlotter:
                 model_name=self.bestFitModelName)
 
             if os.path.isfile(testSpectrumPath):
-                if 'MODEL' in grism:
+                if isinstance(grism, str) and 'MODEL' in grism and bestFitModelName is not None and bestFitModelNorm is not None:
                     self.spectralData[grism] = pd.read_csv(
                         testSpectrumPath,
-                        header=4,
+                        header=None,
+                        comment='#',
                         delim_whitespace=True,
                         names=['WAVELENGTH', 'FLUX']).dropna()
                     self.spectralData[grism].FLUX /= self.bestFitModelNorm
@@ -219,6 +228,34 @@ class SpecPlotter:
                                              label='$f\,(m_{}^{})$'.format(r'{\rm AB}', r'{{\rm F' + str(SpecPlotter.filterPivotWavelengthsForGrism[grism][0]) + 'W}}'))
                 errorBars[-1][0].set_linestyle('--')
 
+    def matchSpectrumNormalizations(self, targetSpectrum, fiducialSpectrum) :
+        """
+        Computes the multiplicative scaling that must be applied to targetSpectrum
+        in order to minimize the residuals between it and fiducialSpectrum
+        """
+        normFactor = np.sum(targetSpectrum.FLUX * fiducialSpectrum.FLUX) / np.sum(targetSpectrum.FLUX**2)
+        return normFactor
+
+    def resampleModelSpectrum(self, rawModelSpectrum, samplingExampleSpectrum) :
+        # Interpolate the values of the Y axis to enable rebinning by integration
+        # between new bounds
+        dataInterpolator = sp.interpolate.InterpolatedUnivariateSpline(rawModelSpectrum.WAVELENGTH,
+                                                                       rawModelSpectrum.FLUX,
+                                                                       k=1)
+
+        binBoundaries = [
+            *samplingExampleSpectrum.head(1).WAVELENGTH.values,
+            *(0.5 * (samplingExampleSpectrum.WAVELENGTH.iloc[1:].values + samplingExampleSpectrum.WAVELENGTH.iloc[:-1].values)),
+            *samplingExampleSpectrum.tail(1).WAVELENGTH.values]
+
+        print(len(binBoundaries), len(samplingExampleSpectrum.WAVELENGTH))
+
+        resampledFluxes = [ dataInterpolator.integral(minWavelength, maxWavelength)/(maxWavelength-minWavelength) for (minWavelength, maxWavelength) in zip(binBoundaries[:-1], binBoundaries[1:])]
+        resampledSpectrum = samplingExampleSpectrum.copy()
+        resampledSpectrum.FLUX = resampledFluxes
+        resampledSpectrum.ERROR = np.zeros_like(resampledSpectrum.ERROR)
+        return resampledSpectrum
+
     def plotZerothOrders(self, targetAxes):
         zerothOrderData = self.spectralData['COMBINED']['ZEROTH']
         indicesWithZerothOrders = np.where(zerothOrderData > 1)
@@ -239,6 +276,12 @@ class SpecPlotter:
         plotYLimits = self.computePlottingLimits()
         plotAxes.set_ylabel(r'Observed Flux (erg cm$^{-2}$ s$^{-1}$ $\rm{\AA}^{-1}$)', size='large')
         # plotAxes.set_ylim(0, plotYLimits[1])
+
+        self.spectralData['MODEL'] = self.resampleModelSpectrum(self.spectralData['MODEL'], self.spectralData['COMBINED'])
+
+        self.bestModelNormFactor = self.matchSpectrumNormalizations(self.spectralData['MODEL'], self.spectralData['COMBINED'])
+        self.spectralData['MODEL'].FLUX *= self.bestModelNormFactor
+
         for grism, data in self.spectralData.items():
             if data is not None:
                 grismRange = SpecPlotter.spectrumRanges[grism].to(astrounits.angstrom).value
@@ -269,6 +312,7 @@ class SpecPlotter:
                                               label='{} Spectrum'.format(
                                                   SpecPlotter.spectrumLabels[grism]),
                                               linewidth=(1 if not isinstance(grism, int) else 2),
+                                              marker=SpecPlotter.spectrumMarkers[grism],
                                               sharex=True
                                               )
 
@@ -280,7 +324,7 @@ class SpecPlotter:
         self.plotZerothOrders(plotAxes)
 
         handles, labels = plotAxes.get_legend_handles_labels()
-        plotAxes.legend(handles, labels, fontsize='large', handlelength=5, ncol=1, loc='best')
+        plotAxes.legend(handles, labels, fontsize='large', handlelength=5, ncol=2, loc='upper center')
 
         # axvspan(xmin, xmax, ymin=0, ymax=1, **kwargs)
 
