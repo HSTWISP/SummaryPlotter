@@ -331,6 +331,8 @@ class SpecPlotter:
         if savePath is not None:
             mplplot.savefig(savePath, dpi=300, bbox_inches='tight')
             mplplot.close()
+        else :
+            return plotAxes
 
     def makeStandardGridSpec(self):
         # generate a standard grid specification that includes positions for

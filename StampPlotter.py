@@ -398,7 +398,8 @@ class StampPlotter:
             if savePath is not None:
                 mplplot.savefig(savePath, dpi=300, bbox_inches='tight')
                 mplplot.close()
-            return allSubPlotAxes
+            else:
+                return allSubPlotAxes
         else:
             print('The loadDrizzledStamps(...) method must be called before drizzled stamps can be plotted.')
 
@@ -485,7 +486,8 @@ class StampPlotter:
             if savePath is not None:
                 mplplot.savefig(savePath, dpi=300, bbox_inches='tight')
                 mplplot.close()
-            return allSubPlotAxes
+            else:
+                return allSubPlotAxes
         else:
             print('The loadDirectCutouts(...) method must be called before direct cutouts can be plotted.')
 
