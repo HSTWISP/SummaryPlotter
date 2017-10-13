@@ -299,6 +299,7 @@ class StampPlotter:
 
     def plotDrizzledStamps(self, extName='SCI', colourMap='viridis', applyWCS=True, savePath=None, gridSpecs=None, zerothOrderData=None):
         if self.stampHdus[extName] is not None:
+            allSubPlotAxes = []
             if gridSpecs is None:
                 mplplot.figure(figsize=(10, 5))
             for stampIndex, (grism, hduData) in enumerate(self.stampHdus[extName].items()):
@@ -307,6 +308,7 @@ class StampPlotter:
                         subplotAxes = mplplot.subplot(2, 1, stampIndex + 1)
                     else:
                         subplotAxes = mplplot.subplot(gridSpecs[stampIndex])
+                    allSubPlotAxes.append(subplotAxes)
                     subplotAxes.text(0.5,
                                      0.5,
                                      'Field {}, Object {}:\nNO DATA AVAILABLE.'.format(self.targetPar,
@@ -396,11 +398,13 @@ class StampPlotter:
             if savePath is not None:
                 mplplot.savefig(savePath, dpi=300, bbox_inches='tight')
                 mplplot.close()
+            return allSubPlotAxes
         else:
             print('The loadDrizzledStamps(...) method must be called before drizzled stamps can be plotted.')
 
     def plotDirectCutouts(self, savePath=None, colourMap='viridis', gridSpecs=None):
         if self.directCutouts is not None:
+            allSubPlotAxes = []
             if gridSpecs is None:
                 mplplot.figure(figsize=(10, 5))
             for stampIndex, (grism, cutoutData) in enumerate(self.directCutouts.items()):
@@ -408,6 +412,8 @@ class StampPlotter:
                     subplotAxes = mplplot.subplot(2, 1, stampIndex + 1)
                 else:
                     subplotAxes = mplplot.subplot(gridSpecs[stampIndex])
+
+                allSubPlotAxes.append(subplotAxes)
 
                 if cutoutData is None:
                     subplotAxes.text(0.5,
@@ -479,7 +485,7 @@ class StampPlotter:
             if savePath is not None:
                 mplplot.savefig(savePath, dpi=300, bbox_inches='tight')
                 mplplot.close()
-
+            return allSubPlotAxes
         else:
             print('The loadDirectCutouts(...) method must be called before direct cutouts can be plotted.')
 
