@@ -12,6 +12,7 @@ import astropy.units as astrounits
 import matplotlib
 import matplotlib.pyplot as mplplot
 import matplotlib.patches as mplpatches
+import matplotlib.gridspec as mplgs
 import numpy as np
 import scipy as sp
 import scipy.stats as spstats
@@ -245,7 +246,7 @@ class StampPlotter:
                     and region.coord_list[0] < drizzledStampBBoxCoordinates[1][0]
                     and region.coord_list[1] > drizzledStampBBoxCoordinates[0][1]
                     and region.coord_list[1] < drizzledStampBBoxCoordinates[1][1]):
-                print('Start: {}, {}'.format(region.coord_list, drizzledStampBBoxCoordinates))
+                print('Start: {}, {}, {}'.format(region.coord_list, drizzledStampBBoxCoordinates, imageReferencePoint))
                 # Convert from non-drizzled grism image coordinates into stamp bounding
                 # box coordinates
                 region.coord_list[0] -= imageReferencePoint[0]  # drizzledStampBBoxCoordinates[0][0]
@@ -411,20 +412,32 @@ class StampPlotter:
                 if cutoutData is None:
                     subplotAxes.text(0.5,
                                      0.5,
-                                     'Field {}, Object {}:\nNO DATA AVAILABLE.'.format(self.targetPar,
-                                                                                       self.targetObject),
+                                     'Field {}\nObject {}\nGrism G{}\nNO DATA AVAILABLE.'.format(self.targetPar,
+                                                                                                 self.targetObject,
+                                                                                                 grism),
                                      horizontalalignment='center',
+                                     verticalalignment='center',
                                      fontsize='large',
                                      transform=subplotAxes.transAxes)
+                    # subplotAxes.get_xaxis().set_visible(False)
+                    # subplotAxes.get_yaxis().set_visible(False)
+                    # subplotAxes.get_frame().set_visible(False)
+                    subplotAxes.set_axis_off()
                     continue
                 if np.all(cutoutData < 0):
                     subplotAxes.text(0.5,
                                      0.5,
-                                     'Field {}, Object {}:\nNO NONZERO DATA AVAILABLE.'.format(self.targetPar,
-                                                                                               self.targetObject),
+                                     'Field {}\nObject {}\nGrism G{}\nNO NONZERO DATA AVAILABLE.'.format(self.targetPar,
+                                                                                                         self.targetObject,
+                                                                                                         grism),
                                      horizontalalignment='center',
+                                     verticalalignment='center',
                                      fontsize='large',
                                      transform=subplotAxes.transAxes)
+                    # subplotAxes.get_xaxis().set_visible(False)
+                    # subplotAxes.get_yaxis().set_visible(False)
+                    # subplotAxes.get_frame().set_visible(False)
+                    subplotAxes.set_axis_off()
                     continue
 
                 norm = astromplnorm.ImageNormalize(cutoutData,
@@ -494,3 +507,15 @@ class StampPlotter:
             return self.directHdus[grism][1][skyKeyword]
         else:
             print('The loadDirectCutouts(...) method must be called before sky-subtracted direct cutouts can be returned.')
+
+    def makeStandardGridSpecForDrizzledStamps(self):
+        # generate a standard grid specification that includes positions for the stamp imagegridSpec
+        fullGridSpec = mplgs.GridSpec(3, 2, width_ratios=[4, 1], height_ratios=[4, 1, 1])
+        # return the portion of the grid specification into which the stamps should be plotted.
+        return (fullGridSpec[1, 0], fullGridSpec[2, 0])
+
+    def makeStandardGridSpecForDirectCutouts(self):
+        # generate a standard grid specification that includes positions for the stamp imagegridSpec
+        fullGridSpec = mplgs.GridSpec(3, 2, width_ratios=[4, 1], height_ratios=[4, 1, 1])
+        # return the portion of the grid specification into which the stamps should be plotted.
+        return (fullGridSpec[1, 1], fullGridSpec[2, 1])

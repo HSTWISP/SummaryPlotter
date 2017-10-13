@@ -6,62 +6,12 @@ import astropy.units as astrounits
 import os
 import itertools
 import matplotlib.pyplot as mplplot
+import matplotlib.gridspec as mplgs
 import glob
 import re
 
+from SpecLoader import SpecLoader
 
-class SpecLoader:
-
-    def __init__(self,
-                 baseDirPathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}',
-                 parDirPathPattern='{base_dir}/Par{par}',
-                 withGrismSpectrumPathPattern='{par_dir}/Spectra/Par{par}_G{grism}_BEAM_{object}A.dat',
-                 bothGrismSpectrumPathPattern='{par_dir}/Spectra/Par{par}_BEAM_{object}A.dat'):
-
-        self.baseDirPathPattern = baseDirPathPattern
-        self.parDirPathPattern = parDirPathPattern
-
-        self.spectrumPathPatterns = {141: withGrismSpectrumPathPattern,
-                                     102: withGrismSpectrumPathPattern,
-                                     'COMBINED': bothGrismSpectrumPathPattern}
-        self.pipelineVersion = None
-        self.targetPar = None
-
-        self.spectralData = {141: None,
-                             102: None,
-                             'COMBINED': None}
-
-        self.spectrumFilePaths = {141: None,
-                                  102: None,
-                                  'COMBINED': None}
-
-        self.spectrumDetails = {141: None,
-                                102: None,
-                                'COMBINED': None}
-
-        self.spectrumFilePathsFrame = None
-
-    def locateAllSpectra(self, pipelineVersion=6.2):
-        baseDir = self.baseDirPathPattern.format(pipeline_version=pipelineVersion)
-        parDirectories = glob.glob(self.parDirPathPattern.format(base_dir=baseDir, par='*'))
-        parNumbers = [int(re.search('Par([0-9]+)', path).group(1)) for path in parDirectories]
-
-        self.spectrumFilePaths = {grismKey: {parNumber: {int(re.search('BEAM_([0-9]+)', path).group(1)): path for path in
-                                                         glob.glob(grismPattern.format(
-                                                             par_dir=parDirectory, par=parNumber, grism=grismKey, object='*'))} for parNumber, parDirectory in zip(parNumbers, parDirectories)}
-                                  if isinstance(grismKey, int) else
-                                  {parNumber: {int(re.search('BEAM_([0-9]+)', path).group(1)): path for path in
-                                               glob.glob(grismPattern.format(
-                                                   par_dir=parDirectory, par=parNumber, object='*'))} for parNumber, parDirectory in zip(parNumbers, parDirectories)}
-                                  for grismKey, grismPattern in self.spectrumPathPatterns.items()}
-
-        spectrumPathIndexDataDict = {(grism, int(parNumber), target): path
-                                     for grism, grismData in self.spectrumFilePaths.items()
-                                     for parNumber, parData in grismData.items()
-                                     for target, path in parData.items()}
-
-        self.spectrumFilePathsFrame = pd.DataFrame({'PATH': [ path for path in spectrumPathIndexDataDict.values() ]}, index=pd.MultiIndex.from_tuples(
-            spectrumPathIndexDataDict.keys(), names=['GRISM', 'PAR', 'TARGET'])).sort_index()
 
 # TODO: Refactor to use SpecLoader
 
@@ -87,10 +37,12 @@ class SpecPlotter:
         'MODEL': '|'}
 
     spectrumRanges = {
-        141: (1100, 1700) * astrounits.nanometer,  # (1075, 1700)*astrounits.nanometer,
-        102: (800, 1150) * astrounits.nanometer,  # (800, 1150)*astrounits.nanometer
+        # (1075, 1700)*astrounits.nanometer,
+        141: (1100, 1700) * astrounits.nanometer,
+        # (800, 1150)*astrounits.nanometer
+        102: (800, 1150) * astrounits.nanometer,
         'COMBINED': (800, 1700) * astrounits.nanometer,
-        'MODEL' : (800, 1700)*astrounits.nanometer}
+        'MODEL': (800, 1700) * astrounits.nanometer}
 
     filterPivotWavelengthsForGrism = {102: (110, 11534.46 * astrounits.angstrom),
                                       141: (160, 15370.33 * astrounits.angstrom)}
@@ -116,12 +68,14 @@ class SpecPlotter:
                              'COMBINED': None,
                              'MODEL': None}
 
-    def loadSpectralData(self, targetObject, targetPar, bestFitModelName = None, bestFitModelNorm = None, pipelineVersion=6.2):
+    def loadSpectralData(self, targetObject, targetPar, bestFitModelName=None, bestFitModelNorm=None, bestFitRedshift=0, subtractContamination=True, pipelineVersion=6.2):
         # lazy assignment of targetPar and pipelineVersion
         self.targetObject = targetObject
         self.targetPar = targetPar
         self.bestFitModelName = bestFitModelName
         self.bestFitModelNorm = bestFitModelNorm
+        self.subtractContamination = subtractContamination
+        self.bestFitRedshift = bestFitRedshift
         self.pipelineVersion = pipelineVersion
         # load spectral data for individual grisms
         for grism in self.spectralData.keys():
@@ -141,8 +95,11 @@ class SpecPlotter:
                         delim_whitespace=True,
                         names=['WAVELENGTH', 'FLUX']).dropna()
                     self.spectralData[grism].FLUX /= self.bestFitModelNorm
-                    self.spectralData[grism]['ERROR'] = np.zeros_like(self.spectralData[grism].FLUX)
-                else :
+                    self.spectralData[
+                        grism].WAVELENGTH *= (1.0 + self.bestFitRedshift)
+                    self.spectralData[grism]['ERROR'] = np.zeros_like(
+                        self.spectralData[grism].FLUX)
+                else:
                     self.spectralData[grism] = pd.read_csv(
                         testSpectrumPath,
                         skipinitialspace=True,
@@ -150,6 +107,9 @@ class SpecPlotter:
                         comment='#',
                         delim_whitespace=True,
                         names=['WAVELENGTH', 'FLUX', 'ERROR', 'CONTAM', 'ZEROTH']).dropna()
+                    if self.subtractContamination:
+                        self.spectralData[
+                            grism].FLUX -= self.spectralData[grism].CONTAM
 
     def computePlottingLimits(self):
         minFluxes = []
@@ -157,8 +117,10 @@ class SpecPlotter:
 
         for grism, data in self.spectralData.items():
             if data is not None:
-                grismRange = SpecPlotter.spectrumRanges[grism].to(astrounits.angstrom).value
-                fullRange = SpecPlotter.plottedWavelengthRange.to(astrounits.angstrom).value
+                grismRange = SpecPlotter.spectrumRanges[
+                    grism].to(astrounits.angstrom).value
+                fullRange = SpecPlotter.plottedWavelengthRange.to(
+                    astrounits.angstrom).value
                 # print (grismRange)
                 validWavelengthIndices = np.where((data.WAVELENGTH < grismRange[1]) &
                                                   (data.WAVELENGTH > grismRange[0]) &
@@ -179,7 +141,8 @@ class SpecPlotter:
 
         perHzUnit = astrounits.erg / astrounits.second / astrounits.Hz / astrounits.cm**2
         fluxPerHz = 10**(-2.0 * (abMagnitude + 48.6) / 5.0) * perHzUnit
-        perAnstromUnit = astrounits.erg / astrounits.second / astrounits.angstrom / astrounits.cm**2
+        perAnstromUnit = astrounits.erg / astrounits.second / \
+            astrounits.angstrom / astrounits.cm**2
         fluxPerAngstrom = fluxPerHz.to(perAnstromUnit,
                                        equivalencies=astrounits.spectral_density(
                                            SpecPlotter.filterPivotWavelengthsForGrism[grism][1].to(astrounits.angstrom))
@@ -188,10 +151,11 @@ class SpecPlotter:
 
     def plotContamination(self, baseAxes):
         for grism, specRange in SpecPlotter.spectrumRanges.items():
-            if not isinstance(grism, int):
+            if not isinstance(grism, int) or self.spectralData[grism] is None:
                 continue
             grismRange = specRange.to(astrounits.angstrom).value
-            fullRange = SpecPlotter.plottedWavelengthRange.to(astrounits.angstrom).value
+            fullRange = SpecPlotter.plottedWavelengthRange.to(
+                astrounits.angstrom).value
 
             validWavelengths = ((self.spectralData[grism].WAVELENGTH.diff() > 0) &
                                 (self.spectralData[grism].WAVELENGTH < grismRange[1]) &
@@ -201,7 +165,8 @@ class SpecPlotter:
 
             mplplot.fill_between(self.spectralData[grism].WAVELENGTH[validWavelengths],
                                  0,
-                                 self.spectralData[grism].CONTAM[validWavelengths],
+                                 self.spectralData[grism].CONTAM[
+                                     validWavelengths],
                                  color=SpecPlotter.spectrumColours[grism],
                                  alpha=0.2,
                                  label='G{} Contamination'.format(grism))
@@ -220,23 +185,40 @@ class SpecPlotter:
                                              fluxForMagnitude.value,
                                              axes=targetAxes,
                                              marker='o',
-                                             xerr=np.array([[lowError.value], [highError.value]]),
-                                             c=SpecPlotter.spectrumColours[grism],
+                                             xerr=np.array(
+                                                 [[lowError.value], [highError.value]]),
+                                             c=SpecPlotter.spectrumColours[
+                                                 grism],
                                              ms=10,
                                              elinewidth=2,
                                              capthick=2,
                                              label='$f\,(m_{}^{})$'.format(r'{\rm AB}', r'{{\rm F' + str(SpecPlotter.filterPivotWavelengthsForGrism[grism][0]) + 'W}}'))
                 errorBars[-1][0].set_linestyle('--')
 
-    def matchSpectrumNormalizations(self, targetSpectrum, fiducialSpectrum) :
+    def matchSpectrumNormalizations(self, targetSpectrum, fiducialSpectrum):
         """
         Computes the multiplicative scaling that must be applied to targetSpectrum
         in order to minimize the residuals between it and fiducialSpectrum
         """
-        normFactor = np.sum(targetSpectrum.FLUX * fiducialSpectrum.FLUX) / np.sum(targetSpectrum.FLUX**2)
+        normFactor = np.sum(
+            targetSpectrum.FLUX * fiducialSpectrum.FLUX) / np.sum(targetSpectrum.FLUX**2)
         return normFactor
 
-    def resampleModelSpectrum(self, rawModelSpectrum, samplingExampleSpectrum) :
+    def interpolateModelSpectrum(self, rawModelSpectrum, samplingExampleSpectrum):
+        # Interpolate the values of the Y axis to enable simple resampling of the modelData
+        # at the data sampling points.
+        dataInterpolator = sp.interpolate.InterpolatedUnivariateSpline(x=rawModelSpectrum.WAVELENGTH,
+                                                                       y=rawModelSpectrum.FLUX,
+                                                                       k=1)
+
+        interpolatedSpectrum = samplingExampleSpectrum.copy()
+        interpolatedSpectrum.FLUX = dataInterpolator(
+            interpolatedSpectrum.WAVELENGTH.values)
+        interpolatedSpectrum.ERROR = np.zeros_like(interpolatedSpectrum.ERROR)
+
+        return interpolatedSpectrum
+
+    def resampleModelSpectrum(self, rawModelSpectrum, samplingExampleSpectrum):
         # Interpolate the values of the Y axis to enable rebinning by integration
         # between new bounds
         dataInterpolator = sp.interpolate.InterpolatedUnivariateSpline(rawModelSpectrum.WAVELENGTH,
@@ -245,12 +227,12 @@ class SpecPlotter:
 
         binBoundaries = [
             *samplingExampleSpectrum.head(1).WAVELENGTH.values,
-            *(0.5 * (samplingExampleSpectrum.WAVELENGTH.iloc[1:].values + samplingExampleSpectrum.WAVELENGTH.iloc[:-1].values)),
+            *(0.5 * (samplingExampleSpectrum.WAVELENGTH.iloc[
+              1:].values + samplingExampleSpectrum.WAVELENGTH.iloc[:-1].values)),
             *samplingExampleSpectrum.tail(1).WAVELENGTH.values]
 
-        print(len(binBoundaries), len(samplingExampleSpectrum.WAVELENGTH))
-
-        resampledFluxes = [ dataInterpolator.integral(minWavelength, maxWavelength)/(maxWavelength-minWavelength) for (minWavelength, maxWavelength) in zip(binBoundaries[:-1], binBoundaries[1:])]
+        resampledFluxes = [dataInterpolator.integral(minWavelength, maxWavelength) / (
+            maxWavelength - minWavelength) for (minWavelength, maxWavelength) in zip(binBoundaries[:-1], binBoundaries[1:])]
         resampledSpectrum = samplingExampleSpectrum.copy()
         resampledSpectrum.FLUX = resampledFluxes
         resampledSpectrum.ERROR = np.zeros_like(resampledSpectrum.ERROR)
@@ -267,30 +249,36 @@ class SpecPlotter:
             currentAxis = mplplot.gca()
             mplplot.sca(targetAxes)
             mplplot.axvspan(self.spectralData['COMBINED']['WAVELENGTH'][group[0]],
-                            self.spectralData['COMBINED']['WAVELENGTH'][group[-1]],
+                            self.spectralData['COMBINED'][
+                                'WAVELENGTH'][group[-1]],
                             fc='gray', ec='gray', fill=True, alpha=0.3)
             mplplot.sca(currentAxis)
 
     def plotSpectrum(self, savePath=None, abMagnitudes=None, gridSpec=None):
         plotAxes = None if gridSpec is None else mplplot.subplot(gridSpec)
         plotYLimits = self.computePlottingLimits()
-        plotAxes.set_ylabel(r'Observed Flux (erg cm$^{-2}$ s$^{-1}$ $\rm{\AA}^{-1}$)', size='large')
+        plotAxes.set_ylabel(
+            r'Observed Flux (erg cm$^{-2}$ s$^{-1}$ $\rm{\AA}^{-1}$)', size='large')
         # plotAxes.set_ylim(0, plotYLimits[1])
 
-        self.spectralData['MODEL'] = self.resampleModelSpectrum(self.spectralData['MODEL'], self.spectralData['COMBINED'])
-
-        self.bestModelNormFactor = self.matchSpectrumNormalizations(self.spectralData['MODEL'], self.spectralData['COMBINED'])
-        self.spectralData['MODEL'].FLUX *= self.bestModelNormFactor
+        if self.spectralData['MODEL'] is not None:
+            self.bestModelNormFactor = 1
+            self.spectralData['MODEL'] = self.interpolateModelSpectrum(
+                self.spectralData['MODEL'], self.spectralData['COMBINED'])
 
         for grism, data in self.spectralData.items():
             if data is not None:
-                grismRange = SpecPlotter.spectrumRanges[grism].to(astrounits.angstrom).value
-                fullRange = SpecPlotter.plottedWavelengthRange.to(astrounits.angstrom).value
+                grismRange = SpecPlotter.spectrumRanges[
+                    grism].to(astrounits.angstrom).value
+                fullRange = SpecPlotter.plottedWavelengthRange.to(
+                    astrounits.angstrom).value
 
                 runningMaxWavelength = np.maximum.accumulate(data.WAVELENGTH)
-                _, increasingWavelengthIndices = np.unique(runningMaxWavelength, return_index=True)
+                _, increasingWavelengthIndices = np.unique(
+                    runningMaxWavelength, return_index=True)
 
-                increasingWavelengthData = data.iloc[increasingWavelengthIndices]
+                increasingWavelengthData = data.iloc[
+                    increasingWavelengthIndices]
 
                 wavelengthCut = ((increasingWavelengthData.WAVELENGTH < grismRange[1]) &
                                  (increasingWavelengthData.WAVELENGTH > grismRange[0]) &
@@ -307,28 +295,35 @@ class SpecPlotter:
                                               yerr=('ERROR' if not isinstance(
                                                   grism, int) else None),
                                               logy=False,
-                                              c=SpecPlotter.spectrumColours[grism],
+                                              c=SpecPlotter.spectrumColours[
+                                                  grism],
                                               alpha=0.6,
                                               label='{} Spectrum'.format(
                                                   SpecPlotter.spectrumLabels[grism]),
-                                              linewidth=(1 if not isinstance(grism, int) else 2),
-                                              marker=SpecPlotter.spectrumMarkers[grism],
+                                              linewidth=(1 if not isinstance(
+                                                  grism, int) else 2),
+                                              marker=SpecPlotter.spectrumMarkers[
+                                                  grism],
                                               sharex=True
                                               )
 
         if abMagnitudes is not None:
-            self.plotAbMagnitudesAsFluxes(abMagnitudes=abMagnitudes, targetAxes=plotAxes)
+            self.plotAbMagnitudesAsFluxes(
+                abMagnitudes=abMagnitudes, targetAxes=plotAxes)
 
-        plotAxes = self.plotContamination(plotAxes)
+        if not self.subtractContamination:
+            plotAxes = self.plotContamination(plotAxes)
 
         self.plotZerothOrders(plotAxes)
 
         handles, labels = plotAxes.get_legend_handles_labels()
-        plotAxes.legend(handles, labels, fontsize='large', handlelength=5, ncol=2, loc='upper center')
+        plotAxes.legend(handles, labels, fontsize='large',
+                        handlelength=5, ncol=2, loc='upper center')
 
         # axvspan(xmin, xmax, ymin=0, ymax=1, **kwargs)
 
-        plotAxes.set_xlabel(r'Observed Wavelength (${\rm {\AA}}$)', size='large')
+        plotAxes.set_xlabel(
+            r'Observed Wavelength (${\rm {\AA}}$)', size='large')
         plotAxes.set_title('Field {}, Object {}: 1D Spectra'.format(self.targetPar,
                                                                     self.targetObject))
         plotAxes.set_xlim(*SpecPlotter.plottedWavelengthRange.value)
@@ -336,3 +331,12 @@ class SpecPlotter:
         if savePath is not None:
             mplplot.savefig(savePath, dpi=300, bbox_inches='tight')
             mplplot.close()
+
+    def makeStandardGridSpec(self):
+        # generate a standard grid specification that includes positions for
+        # the stamp imagegridSpec
+        fullGridSpec = mplgs.GridSpec(
+            3, 2, width_ratios=[4, 1], height_ratios=[4, 1, 1])
+        # return the portion of the grid specification into which the spectra
+        # should be plotted.
+        return fullGridSpec[0, 0]
