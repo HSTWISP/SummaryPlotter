@@ -1,10 +1,12 @@
 import os
+import warnings
 
 import astropy.io.fits as astrofits
 import astropy.units as astrounits
 import astropy.wcs as astrowcs
 import astropy.visualization as astrovis
 import astropy.visualization.mpl_normalize as astromplnorm
+import astropy.nddata as astronddata
 import astropy.nddata.utils as astrondutils
 
 import astropy.units as astrounits
@@ -40,27 +42,53 @@ class StampPlotter:
                  drizzledStampPathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/G{grism}_DRIZZLE/aXeWFC3_G{grism}_mef_ID{object}.fits',
                  directImagePathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/DATA/DIRECT_GRISM/F{filter}.fits',
                  cutoutSizePixels=40,
-                 doTrimBorderPixels=True):
+                 doTrimBorderPixels=True,
+                 verboseOutput=False):
+        self.reset(drizzledStampPathPattern, directImagePathPattern,
+                   cutoutSizePixels, doTrimBorderPixels, verboseOutput)
+
+    def reset(self,
+              drizzledStampPathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/G{grism}_DRIZZLE/aXeWFC3_G{grism}_mef_ID{object}.fits',
+              directImagePathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/DATA/DIRECT_GRISM/F{filter}.fits',
+              cutoutSizePixels=40,
+              doTrimBorderPixels=True,
+              verboseOutput=False):
         self.drizzledStampPathPattern = drizzledStampPathPattern
         self.directImagePathPattern = directImagePathPattern
         self.cutoutSizePixels = cutoutSizePixels
         self._doTrimBorderPixels = doTrimBorderPixels
+        self._verboseOutput = verboseOutput
+
         self.targetObject = None
         self.targetPar = None
         self.pipelineVersion = None
         self.stampPaths = None
-        self.stampHdus = {'SCI': None, 'WHT': None, 'MOD': None}
+        self.stampHdus = {'SCI': None, 'WHT': None, 'MOD': None, 'CON': None}
         self.directPaths = None
         self.directHdus = None
         self.directCutouts = None
+        self.directCutoutExtentsArcsec = {
+            grism: None for grism in StampPlotter.grismToFilterMap.keys()}
         self._stretchModel = None
         self._stretchInterval = None
-        self._useOptimalZScale = None
+        self._useOptimalZScaleForStamp = None
+        self._useOptimalZScaleForDirectCutout = None
+
+    @property
+    def verboseOutput(self):
+        return self._verboseOutput
+
+    @verboseOutput.setter
+    def verboseOutput(self, verbose):
+        self._verboseOutput = verbose
+        if self.verboseOutput:
+            print('Verbose output activated.')
 
     @property
     def doTrimBorderPixels(self):
-        print('Border pixels{}will be trimmed.'.format(
-            ' ' if self._doTrimBorderPixels else ' not '))
+        if self.verboseOutput:
+            print('Border pixels{}will be trimmed.'.format(
+                ' ' if self._doTrimBorderPixels else ' not '))
         return self._doTrimBorderPixels
 
     @doTrimBorderPixels.setter
@@ -90,12 +118,20 @@ class StampPlotter:
         self._stretchModel = stretchModel
 
     @property
-    def useOptimalZScale(self):
-        return self._useOptimalZScale
+    def useOptimalZScaleForStamp(self):
+        return self._useOptimalZScaleForStamp
 
-    @useOptimalZScale.setter
-    def useOptimalZScale(self, useOptimalZScale=True):
-        self._useOptimalZScale = useOptimalZScale
+    @useOptimalZScaleForStamp.setter
+    def useOptimalZScaleForStamp(self, useOptimalZScale=True):
+        self._useOptimalZScaleForStamp = useOptimalZScale
+
+    @property
+    def useOptimalZScaleForDirectCutout(self):
+        return self._useOptimalZScaleForDirectCutout
+
+    @useOptimalZScaleForDirectCutout.setter
+    def useOptimalZScaleForDirectCutout(self, useOptimalZScale=True):
+        self._useOptimalZScaleForDirectCutout = useOptimalZScale
 
     def getDirectFilterForGrism(self, grism):
         if grism in self.grismToFilterMap:
@@ -195,9 +231,9 @@ class StampPlotter:
         rangePixelBounds = (rangePixels[0][0] + 1, rangePixels[-1][0] + 1)
         return (rangePixelBounds, rangePixels)
 
-    def getTrimmedStampData(self, data, modelData, grism, wcs=None):
+    def getTrimmedStampData(self, data, modelData, contamData, grism, wcs=None):
         # - Determine appropriate range for final image from MOD extension
-        #modelData = self.stampHdus['MOD'][0]
+        # modelData = self.stampHdus['MOD'][0]
         yBounds, pixelsInYBounds = self.getExtractionRange(modelData, 1)
         xBounds, pixelsInXBounds = self.getExtractionRange(modelData, 0)
 
@@ -227,7 +263,8 @@ class StampPlotter:
         modelRectangle.set_linewidth(2)
         modelRectangle.set_linestyle('--')
 
-        print(trimmedData.shape, data.shape)
+        if self.verboseOutput:
+            print(trimmedData.shape, data.shape)
 
         return trimmedData, modelData[yRange[0]:yRange[1], xBounds[0]:xBounds[1]], contamData[yRange[0]:yRange[1], xBounds[0]:xBounds[1]], modelRectangle
 
@@ -315,7 +352,7 @@ class StampPlotter:
             # regionGraphic.set_transform(targetAxes.transData)
             targetAxes.add_patch(regionGraphic)
 
-    def plotDrizzledStamps(self, extName='SCI', colourMap='viridis', applyWCS=True, savePath=None, gridSpecs=None, zerothOrderData=None):
+    def plotDrizzledStamps(self, extName='SCI', colourMap='viridis', applyWCS=True, savePath=None, gridSpecs=None, zerothOrderData=None, titlePrefix='', titleSuffix=''):
         if self.stampHdus[extName] is not None:
             allSubPlotAxes = []
             if gridSpecs is None:
@@ -356,7 +393,7 @@ class StampPlotter:
                 if applyWCS:
                     wcsObject = self.buildWCSObject(stampHeader)
                     wavelengthUnit = r'${\rm {\AA}}$'
-                    #wavelengthUnit = 'm'
+                    # wavelengthUnit = 'm'
                     # leave X-dispersion in arsecond units
                     xDispUnit = wcsObject.wcs.cunit[1]
                 else:
@@ -371,12 +408,13 @@ class StampPlotter:
                 modelRect = None
                 if self.doTrimBorderPixels:
                     cutoutData, cutoutModel, cutoutContam, modelRect = self.getTrimmedStampData(
-                        stampData, modelData, grism, wcs=wcsObject)
+                        stampData, modelData, contamData, grism, wcs=wcsObject)
                     stampData = cutoutData.data
                     wcsObject = cutoutData.wcs
 
-                if self.useOptimalZScale:
-                    (vMin, vMax), interval = self.computeDefaultZRange(stampData, cutoutContam)
+                if self.useOptimalZScaleForStamp:
+                    (vMin, vMax), interval = self.computeDefaultZRange(
+                        stampData, cutoutContam)
                     norm = astromplnorm.ImageNormalize(stampData,
                                                        interval=interval,
                                                        stretch=self.stretchModel(
@@ -409,9 +447,10 @@ class StampPlotter:
 
                 mplplot.xlabel('Wavelength ({})'.format(wavelengthUnit))
                 mplplot.ylabel('Cross-dispersion ({})'.format(xDispUnit))
-                mplplot.title('Field {}, Object {}: \nDrizzled stamp for G{}'.format(self.targetPar,
-                                                                                     self.targetObject,
-                                                                                     grism))
+                mplplot.title('{}Field {}, Object {}: \nDrizzled stamp for G{}{}'.format(titlePrefix, self.targetPar,
+                                                                                         self.targetObject,
+                                                                                         grism,
+                                                                                         titleSuffix))
                 mplplot.grid(color='white', ls='solid')
 
                 if zerothOrderData is not None and zerothOrderData[grism] is not None:
@@ -434,6 +473,15 @@ class StampPlotter:
         else:
             print(
                 'The loadDrizzledStamps(...) method must be called before drizzled stamps can be plotted.')
+
+    def getDirectCutoutExtentsArcsec(self, grism):
+        if grism in self.directCutoutExtentsArcsec and self.directCutoutExtentsArcsec[grism] is not None:
+            return self.directCutoutExtentsArcsec[grism]
+        else:
+            print(('Direct cutout size in arc-seconds not available for G{} (F{}W) '
+                   'Note that the direct cutout must have been plotted before this value '
+                   'is computed.').format(grism, StampPlotter.grismToFilterMap[grism]))
+            return None
 
     def plotDirectCutouts(self, savePath=None, colourMap='viridis', gridSpecs=None):
         if self.directCutouts is not None:
@@ -458,9 +506,6 @@ class StampPlotter:
                                      verticalalignment='center',
                                      fontsize='large',
                                      transform=subplotAxes.transAxes)
-                    # subplotAxes.get_xaxis().set_visible(False)
-                    # subplotAxes.get_yaxis().set_visible(False)
-                    # subplotAxes.get_frame().set_visible(False)
                     subplotAxes.set_axis_off()
                     continue
                 if np.all(cutoutData < 0):
@@ -473,17 +518,22 @@ class StampPlotter:
                                      verticalalignment='center',
                                      fontsize='large',
                                      transform=subplotAxes.transAxes)
-                    # subplotAxes.get_xaxis().set_visible(False)
-                    # subplotAxes.get_yaxis().set_visible(False)
-                    # subplotAxes.get_frame().set_visible(False)
                     subplotAxes.set_axis_off()
                     continue
 
-                norm = astromplnorm.ImageNormalize(cutoutData,
-                                                   interval=astrovis.AsymmetricPercentileInterval(
-                                                       0, 99.5),
-                                                   stretch=astrovis.LinearStretch(),
-                                                   clip=True)
+                if self.useOptimalZScaleForDirectCutout:
+                    (vMin, vMax), interval = self.computeDefaultZRange(
+                        cutoutData, np.zeros_like(cutoutData))
+                    norm = astromplnorm.ImageNormalize(cutoutData,
+                                                       interval=interval,
+                                                       stretch=self.stretchModel(
+                                                           self, None, cutoutData))
+                else:
+                    norm = astromplnorm.ImageNormalize(cutoutData,
+                                                       interval=astrovis.AsymmetricPercentileInterval(
+                                                           0, 99.5),
+                                                       stretch=astrovis.LinearStretch(),
+                                                       clip=True)
 
                 mplplot.imshow(cutoutData,
                                origin='lower',
@@ -499,13 +549,20 @@ class StampPlotter:
                                                                                              grism),
                                                                                          grism))
                 arcsecYAxis = subplotAxes.twinx()
-                arcsecYAxis.set_ylim(*(np.array(subplotAxes.get_ylim()) - 0.5 *
-                                       np.sum(subplotAxes.get_ylim())) * self.directHdus[grism][1]['IDCSCALE'])
-                print(subplotAxes.get_ylim(),
-                      np.array(subplotAxes.get_ylim()),
-                      np.array(subplotAxes.get_ylim()) *
-                      self.directHdus[grism][1]['IDCSCALE'],
-                      np.array(subplotAxes.get_ylim()) * self.directHdus[grism][1]['IDCSCALE'])
+                self.directCutoutExtentsArcsec[grism] = (tuple((np.array(subplotAxes.get_xlim()) - 0.5 *
+                                                                np.sum(subplotAxes.get_xlim())) * self.directHdus[grism][1]['IDCSCALE']),
+                                                         tuple((np.array(subplotAxes.get_ylim()) - 0.5 *
+                                                                np.sum(subplotAxes.get_ylim())) * self.directHdus[grism][1]['IDCSCALE']))
+                if self.verboseOutput:
+                    print(grism, self.getDirectCutoutExtentsArcsec(grism))
+                    print(subplotAxes.get_ylim(),
+                          np.array(subplotAxes.get_ylim()),
+                          np.array(subplotAxes.get_ylim()) *
+                          self.directHdus[grism][1]['IDCSCALE'],
+                          np.array(subplotAxes.get_ylim()) * self.directHdus[grism][1]['IDCSCALE'])
+
+                arcsecYAxis.set_ylim(
+                    *self.getDirectCutoutExtentsArcsec(grism)[1])
                 arcsecYAxis.set_ylabel('$\Delta Y$ (arcsec)')
                 mplplot.grid(color='white', ls='solid')
 
@@ -524,6 +581,114 @@ class StampPlotter:
         else:
             print(
                 'The loadDirectCutouts(...) method must be called before direct cutouts can be plotted.')
+
+    def plotExtraDirectCutout(self,
+                              dataHdu,
+                              position,
+                              gridSpecs,
+                              dataDescription=None,
+                              sizeArcsec=None,
+                              savePath=None,
+                              colourMap='viridis',
+                              matchExtentforGrism=141):
+        if dataHdu is not None:
+            try:
+                cutoutSize = sizeArcsec if sizeArcsec is not None else tuple([(axisExtent[1] - axisExtent[0]) for axisExtent in self.getDirectCutoutExtentsArcsec(
+                    matchExtentforGrism)])
+                cutoutSize *= astrounits.arcsec
+                wcs = astrowcs.WCS(header=dataHdu.header)
+                cutout = astronddata.Cutout2D(
+                    data=dataHdu.data, position=position, size=cutoutSize, wcs=wcs)
+
+                cutoutData = cutout.data
+            except astrondutils.NoOverlapError as e:
+                print('Error generating cutout for Field {}, Object {}{}: {}'.format(self.targetPar,
+                                                                                   self.targetObject,
+                                                                                   ', {}'.format(dataDescription) if dataDescription is not None else '',
+                                                                                   repr(e)))
+                cutoutData = None
+            except ValueError as e :
+                print('Error generating cutout for Field {}, Object {}{}: {}'.format(self.targetPar,
+                                                                                   self.targetObject,
+                                                                                   ', {}'.format(dataDescription) if dataDescription is not None else '',
+                                                                                   repr(e)))
+                cutoutData = None
+
+        subplotAxes = mplplot.subplot(gridSpecs)
+
+        if dataHdu is None or cutoutData is None or cutoutData.size == 0:
+            subplotAxes.text(0.5,
+                             0.5,
+                             'Field {}\nObject {}{}\nNO DATA AVAILABLE.'.format(self.targetPar,
+                                                                                self.targetObject,
+                                                                                '\n{}'.format(
+                                                                                dataDescription) if dataDescription is not None else ''),
+                             horizontalalignment='center',
+                             verticalalignment='center',
+                             fontsize='large',
+                             transform=subplotAxes.transAxes)
+            subplotAxes.set_axis_off()
+            return subplotAxes
+        if np.all(cutoutData < 0):
+            subplotAxes.text(0.5,
+                             0.5,
+                             'Field {}\nObject {}{}\nNO NONZERO DATA AVAILABLE.'.format(self.targetPar,
+                                                                                        self.targetObject,
+                                                                                        '\n{}'.format(
+                                                                                            dataDescription) if dataDescription is not None else '',
+                                                                                        ),
+                             horizontalalignment='center',
+                             verticalalignment='center',
+                             fontsize='large',
+                             transform=subplotAxes.transAxes)
+            subplotAxes.set_axis_off()
+            return subplotAxes
+
+        if self.useOptimalZScaleForDirectCutout:
+            (vMin, vMax), interval = self.computeDefaultZRange(
+                cutoutData, np.zeros_like(cutoutData))
+            norm = astromplnorm.ImageNormalize(cutoutData,
+                                               interval=interval,
+                                               stretch=self.stretchModel(
+                                                   self, None, cutoutData))
+        else:
+            norm = astromplnorm.ImageNormalize(cutoutData,
+                                               interval=astrovis.AsymmetricPercentileInterval(
+                                                   0, 99.5),
+                                               stretch=astrovis.LinearStretch(),
+                                               clip=True)
+
+        mplplot.imshow(cutoutData,
+                       origin='lower',
+                       interpolation='nearest',
+                       cmap=colourMap,
+                       norm=norm)
+
+        mplplot.xlabel('X (pixels)')
+        mplplot.ylabel('Y (pixels)')
+        mplplot.title('Field {}, Object {}:\nDirect cutout {}'.format(self.targetPar,
+                                                                      self.targetObject,
+                                                                      dataDescription if dataDescription is not None else ''))
+        arcsecYAxis = subplotAxes.twinx()
+        # print(cutoutSize.value, (cutoutSize.value - 0.5*np.sum(cutoutSize.value)))
+        arcsecYAxis.set_ylim(-0.5 *
+                             cutoutSize.value[1], 0.5 * cutoutSize.value[1])
+
+        arcsecYAxis.set_ylabel('$\Delta Y$ (arcsec)')
+        mplplot.grid(color='white', ls='solid')
+
+        try:
+            mplplot.tight_layout()
+        except ValueError as e:
+            print('Error attempting tight_layout for: Field {}, Object {} ({})'.format(self.targetPar,
+                                                                                       self.targetObject,
+                                                                                       e))
+            return
+        if savePath is not None:
+            mplplot.savefig(savePath, dpi=300, bbox_inches='tight')
+            mplplot.close()
+        else:
+            return subplotAxes
 
     def getDrizzledStampData(self, grism):
         if self.stampHdus is not None:
@@ -581,17 +746,18 @@ class StampPlotter:
         # level
         contamThreshold = np.average(
             contaminationMap) if contamThreshold <= 0 else contamThreshold
+
         selectionMask = (contaminationMap < contamThreshold) if (
             contamStdDev > 0) else np.ones_like(plottableData, dtype=int)
-        # maskSum = np.sum(selectionMask)
-        # if maskSum <= 0:
-        #     subjectGenLogger = logging.getLogger('subjectGenLogger')
-        #     subjectGenLogger.warning('In computeOptimalZRange: Sum of selection mask is zero or less ({mask_sum}, {contam_std_dev}, {contam_threshold}, {mean_contam})!'.format(
-        # mask_sum=maskSum, contam_std_dev=contamStdDev,
-        # contam_threshold=contamThreshold,
-        # mean_contam=np.average(contaminationMap)))
 
-        normalizationInterval = astromplnorm.ZScaleInterval()
+        maskSum = np.sum(selectionMask)
+        if maskSum <= 0:
+            raise UserWarning('In computeOptimalZRange: Sum of selection mask is zero or less ({mask_sum}, {contam_std_dev}, {contam_threshold}, {mean_contam})!'.format(
+                mask_sum=maskSum, contam_std_dev=contamStdDev,
+                contam_threshold=contamThreshold,
+                mean_contam=np.average(contaminationMap)))
+
+        normalizationInterval = astrovis.ZScaleInterval()
         vmin, vmax = normalizationInterval.get_limits(
             plottableData[selectionMask])
 

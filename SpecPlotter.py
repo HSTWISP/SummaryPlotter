@@ -18,6 +18,11 @@ from SpecLoader import SpecLoader
 
 class SpecPlotter:
 
+    legendProperties = {'fontsize': 'large',
+                        'handlelength': 5,
+                        'ncol': 2,
+                        'loc': 'upper center'}
+
     spectrumLabels = {
         141: 'G141',
         102: 'G102',
@@ -56,6 +61,13 @@ class SpecPlotter:
                  withGrismSpectrumPathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/Spectra/Par{par}_G{grism}_BEAM_{object}A.dat',
                  bothGrismSpectrumPathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/Spectra/Par{par}_BEAM_{object}A.dat',
                  modelSpectrumPathPattern='/Volumes/ramon2_wisps/z_estimates/bc03_models/{model_name}'):
+        self.reset(withGrismSpectrumPathPattern,
+                   bothGrismSpectrumPathPattern, modelSpectrumPathPattern)
+
+    def reset(self,
+              withGrismSpectrumPathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/Spectra/Par{par}_G{grism}_BEAM_{object}A.dat',
+              bothGrismSpectrumPathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/Spectra/Par{par}_BEAM_{object}A.dat',
+              modelSpectrumPathPattern='/Volumes/ramon2_wisps/z_estimates/bc03_models/{model_name}'):
         self.spectrumPathPatterns = {141: withGrismSpectrumPathPattern,
                                      102: withGrismSpectrumPathPattern,
                                      'COMBINED': bothGrismSpectrumPathPattern,
@@ -67,6 +79,7 @@ class SpecPlotter:
                              102: None,
                              'COMBINED': None,
                              'MODEL': None}
+        self.legendAxes = None
 
     def loadSpectralData(self, targetObject, targetPar, bestFitModelName=None, bestFitModelNorm=None, bestFitRedshift=0, subtractContamination=True, pipelineVersion=6.2):
         # lazy assignment of targetPar and pipelineVersion
@@ -87,7 +100,7 @@ class SpecPlotter:
                 model_name=self.bestFitModelName)
 
             if os.path.isfile(testSpectrumPath):
-                if isinstance(grism, str) and 'MODEL' in grism and bestFitModelName is not None and bestFitModelNorm is not None:
+                if isinstance(grism, str) and 'MODEL' in grism and self.bestFitModelName is not None and self.bestFitModelNorm is not None:
                     self.spectralData[grism] = pd.read_csv(
                         testSpectrumPath,
                         header=None,
@@ -254,7 +267,20 @@ class SpecPlotter:
                             fc='gray', ec='gray', fill=True, alpha=0.3)
             mplplot.sca(currentAxis)
 
-    def plotSpectrum(self, savePath=None, abMagnitudes=None, gridSpec=None):
+    def plotSpectrum(self,
+                     savePath=None,
+                     abMagnitudes=None,
+                     gridSpec=None,
+                     titlePrefix='',
+                     titleSuffix='',
+                     legendProperties=None,
+                     legendGridSpec=None):
+
+        plotLegendProperties = SpecPlotter.legendProperties
+        if legendProperties is not None:
+            plotLegendProperties.update(legendProperties)
+        self.legendAxes = None if legendGridSpec is None else mplplot.subplot(legendGridSpec)
+
         plotAxes = None if gridSpec is None else mplplot.subplot(gridSpec)
         plotYLimits = self.computePlottingLimits()
         plotAxes.set_ylabel(
@@ -289,6 +315,10 @@ class SpecPlotter:
                 if len(plotData.index) == 0:
                     continue
 
+                if grism == 'COMBINED':
+                    plotData.loc[
+                        (plotData.ERROR / plotData.FLUX > 10), 'FLUX'] = np.nan
+
                 plotAxes = plotData.plot.line(ax=plotAxes,
                                               x='WAVELENGTH',
                                               y='FLUX',
@@ -317,21 +347,27 @@ class SpecPlotter:
         self.plotZerothOrders(plotAxes)
 
         handles, labels = plotAxes.get_legend_handles_labels()
-        plotAxes.legend(handles, labels, fontsize='large',
-                        handlelength=5, ncol=2, loc='upper center')
+        if self.legendAxes is not None :
+            self.legendAxes.legend(handles, labels, **plotLegendProperties)
+            self.legendAxes.set_axis_off()
+            plotAxes.legend().remove()
+        else :
+            self.legendAxes = plotAxes
+            plotAxes.legend(handles, labels, **plotLegendProperties)
 
         # axvspan(xmin, xmax, ymin=0, ymax=1, **kwargs)
 
         plotAxes.set_xlabel(
             r'Observed Wavelength (${\rm {\AA}}$)', size='large')
-        plotAxes.set_title('Field {}, Object {}: 1D Spectra'.format(self.targetPar,
-                                                                    self.targetObject))
+        plotAxes.set_title('{}Field {}, Object {}: 1D Spectra{}'.format(titlePrefix, self.targetPar,
+                                                                        self.targetObject, titleSuffix))
+
         plotAxes.set_xlim(*SpecPlotter.plottedWavelengthRange.value)
 
         if savePath is not None:
             mplplot.savefig(savePath, dpi=300, bbox_inches='tight')
             mplplot.close()
-        else :
+        else:
             return plotAxes
 
     def makeStandardGridSpec(self):
