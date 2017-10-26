@@ -60,14 +60,18 @@ class SpecPlotter:
     def __init__(self,
                  withGrismSpectrumPathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/Spectra/Par{par}_G{grism}_BEAM_{object}A.dat',
                  bothGrismSpectrumPathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/Spectra/Par{par}_BEAM_{object}A.dat',
-                 modelSpectrumPathPattern='/Volumes/ramon2_wisps/z_estimates/bc03_models/{model_name}'):
+                 modelSpectrumPathPattern='/Volumes/ramon2_wisps/z_estimates/bc03_models/{model_name}',
+                 verboseOutput=False):
         self.reset(withGrismSpectrumPathPattern,
-                   bothGrismSpectrumPathPattern, modelSpectrumPathPattern)
+                   bothGrismSpectrumPathPattern,
+                   modelSpectrumPathPattern,
+                   verboseOutput)
 
     def reset(self,
               withGrismSpectrumPathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/Spectra/Par{par}_G{grism}_BEAM_{object}A.dat',
               bothGrismSpectrumPathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/Spectra/Par{par}_BEAM_{object}A.dat',
-              modelSpectrumPathPattern='/Volumes/ramon2_wisps/z_estimates/bc03_models/{model_name}'):
+              modelSpectrumPathPattern='/Volumes/ramon2_wisps/z_estimates/bc03_models/{model_name}',
+              verboseOutput=False):
         self.spectrumPathPatterns = {141: withGrismSpectrumPathPattern,
                                      102: withGrismSpectrumPathPattern,
                                      'COMBINED': bothGrismSpectrumPathPattern,
@@ -80,6 +84,8 @@ class SpecPlotter:
                              'COMBINED': None,
                              'MODEL': None}
         self.legendAxes = None
+
+        self.verboseOutput = verboseOutput
 
     def loadSpectralData(self, targetObject, targetPar, bestFitModelName=None, bestFitModelNorm=None, bestFitRedshift=0, subtractContamination=True, pipelineVersion=6.2):
         # lazy assignment of targetPar and pipelineVersion
@@ -256,14 +262,15 @@ class SpecPlotter:
         indicesWithZerothOrders = np.where(zerothOrderData > 1)
         groupedIndicesWithZerothOrders = [list(group) for _, group in itertools.groupby(
             indicesWithZerothOrders[0], key=lambda n, c=itertools.count():n - next(c))]
+
         for group in groupedIndicesWithZerothOrders:
-            print(self.spectralData['COMBINED']['WAVELENGTH'][group[0]],
-                  self.spectralData['COMBINED']['WAVELENGTH'][group[-1]])
+            print(self.spectralData['COMBINED']['WAVELENGTH'].iloc[group[0]],
+                  self.spectralData['COMBINED']['WAVELENGTH'].iloc[group[-1]])
             currentAxis = mplplot.gca()
             mplplot.sca(targetAxes)
-            mplplot.axvspan(self.spectralData['COMBINED']['WAVELENGTH'][group[0]],
+            mplplot.axvspan(self.spectralData['COMBINED']['WAVELENGTH'].iloc[group[0]],
                             self.spectralData['COMBINED'][
-                                'WAVELENGTH'][group[-1]],
+                                'WAVELENGTH'].iloc[group[-1]],
                             fc='gray', ec='gray', fill=True, alpha=0.3)
             mplplot.sca(currentAxis)
 
@@ -279,7 +286,8 @@ class SpecPlotter:
         plotLegendProperties = SpecPlotter.legendProperties
         if legendProperties is not None:
             plotLegendProperties.update(legendProperties)
-        self.legendAxes = None if legendGridSpec is None else mplplot.subplot(legendGridSpec)
+        self.legendAxes = None if legendGridSpec is None else mplplot.subplot(
+            legendGridSpec)
 
         plotAxes = None if gridSpec is None else mplplot.subplot(gridSpec)
         plotYLimits = self.computePlottingLimits()
@@ -334,7 +342,7 @@ class SpecPlotter:
                                                   grism, int) else 2),
                                               marker=SpecPlotter.spectrumMarkers[
                                                   grism],
-                                              sharex=True
+                                              sharex=False
                                               )
 
         if abMagnitudes is not None:
@@ -347,11 +355,11 @@ class SpecPlotter:
         self.plotZerothOrders(plotAxes)
 
         handles, labels = plotAxes.get_legend_handles_labels()
-        if self.legendAxes is not None :
+        if self.legendAxes is not None:
             self.legendAxes.legend(handles, labels, **plotLegendProperties)
             self.legendAxes.set_axis_off()
             plotAxes.legend().remove()
-        else :
+        else:
             self.legendAxes = plotAxes
             plotAxes.legend(handles, labels, **plotLegendProperties)
 

@@ -251,6 +251,22 @@ class StampPlotter:
                                                   1] - xBounds[0]),
                                             mode='trim')
 
+        trimmedContamData = astrondutils.Cutout2D(data=contamData,
+                                                  wcs=wcs,
+                                                  position=(
+                                                      0.5 * (xBounds[0] + xBounds[1]), yMidPoint),
+                                                  size=(yExtent, xBounds[
+                                                      1] - xBounds[0]),
+                                                  mode='trim')
+
+        trimmedModelData = astrondutils.Cutout2D(data=modelData,
+                                                 wcs=wcs,
+                                                 position=(
+                                                     0.5 * (xBounds[0] + xBounds[1]), yMidPoint),
+                                                 size=(yExtent, xBounds[
+                                                     1] - xBounds[0]),
+                                                 mode='trim')
+
         stampHeader = self.stampHdus['SCI'][grism][1]
 
         modelRectangle = mplpatches.Rectangle(xy=(xBounds[0] - stampHeader['CRPIX2'],
@@ -266,7 +282,10 @@ class StampPlotter:
         if self.verboseOutput:
             print(trimmedData.shape, data.shape)
 
-        return trimmedData, modelData[yRange[0]:yRange[1], xBounds[0]:xBounds[1]], contamData[yRange[0]:yRange[1], xBounds[0]:xBounds[1]], modelRectangle
+        # return trimmedData, modelData[yRange[0]:yRange[1],
+        # xBounds[0]:xBounds[1]], contamData[yRange[0]:yRange[1],
+        # xBounds[0]:xBounds[1]], modelRectangle
+        return trimmedData, trimmedModelData.data, trimmedContamData.data, modelRectangle
 
     def buildWCSObject(self, stampHeader):
         # set up WCS object
@@ -352,7 +371,15 @@ class StampPlotter:
             # regionGraphic.set_transform(targetAxes.transData)
             targetAxes.add_patch(regionGraphic)
 
-    def plotDrizzledStamps(self, extName='SCI', colourMap='viridis', applyWCS=True, savePath=None, gridSpecs=None, zerothOrderData=None, titlePrefix='', titleSuffix=''):
+    def plotDrizzledStamps(self,
+                           extName='SCI',
+                           colourMap='viridis',
+                           applyWCS=True,
+                           savePath=None,
+                           gridSpecs=None,
+                           zerothOrderData=None,
+                           titlePrefix='',
+                           titleSuffix=''):
         if self.stampHdus[extName] is not None:
             allSubPlotAxes = []
             if gridSpecs is None:
@@ -603,15 +630,17 @@ class StampPlotter:
                 cutoutData = cutout.data
             except astrondutils.NoOverlapError as e:
                 print('Error generating cutout for Field {}, Object {}{}: {}'.format(self.targetPar,
-                                                                                   self.targetObject,
-                                                                                   ', {}'.format(dataDescription) if dataDescription is not None else '',
-                                                                                   repr(e)))
+                                                                                     self.targetObject,
+                                                                                     ', {}'.format(
+                                                                                         dataDescription) if dataDescription is not None else '',
+                                                                                     repr(e)))
                 cutoutData = None
-            except ValueError as e :
+            except ValueError as e:
                 print('Error generating cutout for Field {}, Object {}{}: {}'.format(self.targetPar,
-                                                                                   self.targetObject,
-                                                                                   ', {}'.format(dataDescription) if dataDescription is not None else '',
-                                                                                   repr(e)))
+                                                                                     self.targetObject,
+                                                                                     ', {}'.format(
+                                                                                         dataDescription) if dataDescription is not None else '',
+                                                                                     repr(e)))
                 cutoutData = None
 
         subplotAxes = mplplot.subplot(gridSpecs)
@@ -622,7 +651,7 @@ class StampPlotter:
                              'Field {}\nObject {}{}\nNO DATA AVAILABLE.'.format(self.targetPar,
                                                                                 self.targetObject,
                                                                                 '\n{}'.format(
-                                                                                dataDescription) if dataDescription is not None else ''),
+                                                                                    dataDescription) if dataDescription is not None else ''),
                              horizontalalignment='center',
                              verticalalignment='center',
                              fontsize='large',
@@ -747,8 +776,8 @@ class StampPlotter:
         contamThreshold = np.average(
             contaminationMap) if contamThreshold <= 0 else contamThreshold
 
-        selectionMask = (contaminationMap < contamThreshold) if (
-            contamStdDev > 0) else np.ones_like(plottableData, dtype=int)
+        selectionMask = np.where(
+            contamStdDev > 0, contaminationMap < contamThreshold, np.ones_like(plottableData, dtype=int))
 
         maskSum = np.sum(selectionMask)
         if maskSum <= 0:
