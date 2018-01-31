@@ -105,7 +105,7 @@ class SpecPlotter:
                 object=targetObject,
                 model_name=self.bestFitModelName)
 
-            if os.path.isfile(testSpectrumPath):
+            if os.path.isfile(testSpectrumPath) and os.access(testSpectrumPath, os.R_OK):
                 if isinstance(grism, str) and 'MODEL' in grism and self.bestFitModelName is not None and self.bestFitModelNorm is not None:
                     self.spectralData[grism] = pd.read_csv(
                         testSpectrumPath,
@@ -324,8 +324,8 @@ class SpecPlotter:
                     continue
 
                 if grism == 'COMBINED':
-                    plotData.loc[
-                        (plotData.ERROR / plotData.FLUX > 10), 'FLUX'] = np.nan
+                    nanLocIndicator = (plotData.ERROR / plotData.FLUX > 10)
+                    plotData.loc[nanLocIndicator, 'FLUX'] = np.nan
 
                 plotAxes = plotData.plot.line(ax=plotAxes,
                                               x='WAVELENGTH',
