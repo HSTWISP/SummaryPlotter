@@ -22,6 +22,8 @@ import scipy.stats as spstats
 import pyregion
 import copy
 
+from CatalogueLoaders import TextCatLoader
+
 
 class StampPlotter:
     """
@@ -40,21 +42,24 @@ class StampPlotter:
 
     def __init__(self,
                  drizzledStampPathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/G{grism}_DRIZZLE/aXeWFC3_G{grism}_mef_ID{object}.fits',
-                 directImagePathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/DATA/DIRECT_GRISM/F{filter}.fits',
-                 cutoutSizePixels=40,
+                 directImagePathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/DATA/DIRECT_GRISM/F{filter}W_drz.fits',
+                 cataloguePattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/DATA/DIRECT_GRISM/fin_F{filter}.cat',
+                 cutoutSizePixels='match',
                  doTrimBorderPixels=True,
                  verboseOutput=False):
-        self.reset(drizzledStampPathPattern, directImagePathPattern,
+        self.reset(drizzledStampPathPattern, directImagePathPattern, cataloguePattern,
                    cutoutSizePixels, doTrimBorderPixels, verboseOutput)
 
     def reset(self,
               drizzledStampPathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/G{grism}_DRIZZLE/aXeWFC3_G{grism}_mef_ID{object}.fits',
-              directImagePathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/DATA/DIRECT_GRISM/F{filter}.fits',
-              cutoutSizePixels=40,
+              directImagePathPattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/DATA/DIRECT_GRISM/F{filter}W_drz.fits',
+              cataloguePattern='/Volumes/ramon2_wisps/data/V{pipeline_version}/Par{par}/DATA/DIRECT_GRISM/fin_F{filter}.cat',
+              cutoutSizePixels='match',
               doTrimBorderPixels=True,
               verboseOutput=False):
         self.drizzledStampPathPattern = drizzledStampPathPattern
         self.directImagePathPattern = directImagePathPattern
+        self.cataloguePattern = cataloguePattern
         self.cutoutSizePixels = cutoutSizePixels
         self._doTrimBorderPixels = doTrimBorderPixels
         self._verboseOutput = verboseOutput
@@ -67,6 +72,10 @@ class StampPlotter:
         self.directPaths = None
         self.directHdus = None
         self.directCutouts = None
+        self.directCutoutDetails = None
+        self.catalogueEntries = None
+        self.stampYLimitsArcsec = {
+            grism: None for grism in StampPlotter.grismToFilterMap.keys()}
         self.directCutoutExtentsArcsec = {
             grism: None for grism in StampPlotter.grismToFilterMap.keys()}
         self._stretchModel = None
@@ -144,42 +153,68 @@ class StampPlotter:
                     return directFilterNumber
         return None
 
-    def interpolateDirectCutout(self, directData, stampHeader):
-        halfCutoutSizePixels = np.floor_divide(self.cutoutSizePixels, 2)
-        refY = np.floor(stampHeader['REFPNTY'])
-        refX = np.floor(stampHeader['REFPNTX'])
-        cutoutLimits = (
-            (
-                int(max(0, refY - halfCutoutSizePixels)),
-                int(min(refY + halfCutoutSizePixels, directData.shape[0]))
-            ),
-            (
-                int(max(0, refX - halfCutoutSizePixels)),
-                int(min(refX + halfCutoutSizePixels, directData.shape[1]))
-            ))
-        return directImageData[cutoutLimits[0][0]: cutoutLimits[0][1], cutoutLimits[1][0]: cutoutLimits[1][1]]
+    # def interpolateDirectCutout(self, directData, stampHeader):
+    #     halfCutoutSizePixels = np.floor_divide(self.cutoutSizePixels, 2)
+    #     refY = np.floor(stampHeader['REFPNTY'])
+    #     refX = np.floor(stampHeader['REFPNTX'])
+    #     cutoutLimits = (
+    #         (
+    #             int(max(0, refY - halfCutoutSizePixels)),
+    #             int(min(refY + halfCutoutSizePixels, directData.shape[0]))
+    #         ),
+    #         (
+    #             int(max(0, refX - halfCutoutSizePixels)),
+    #             int(min(refX + halfCutoutSizePixels, directData.shape[1]))
+    #         ))
+    # return directImageData[cutoutLimits[0][0]: cutoutLimits[0][1],
+    # cutoutLimits[1][0]: cutoutLimits[1][1]]
 
-    def extractDirectCutout(self, directData, stampHeader):
-        halfCutoutSizePixels = np.floor_divide(self.cutoutSizePixels, 2)
-        refY = np.ceil(stampHeader['REFPNTY'])
-        refX = np.ceil(stampHeader['REFPNTX'])
-        cutoutLimits = (
-            (
-                int(max(0, refY - halfCutoutSizePixels)),
-                int(min(refY + halfCutoutSizePixels, directData.shape[0]))
-            ),
-            (
-                int(max(0, refX - halfCutoutSizePixels)),
-                int(min(refX + halfCutoutSizePixels, directData.shape[1]))
-            ))
-        return directData[cutoutLimits[0][0]: cutoutLimits[0][1], cutoutLimits[1][0]: cutoutLimits[1][1]]
+    def extractDirectCutout(self, directData, directHeader, grism):
+        try:
+            # cutoutSize = sizeArcsec if sizeArcsec is not None else tuple([(axisExtent[1] - axisExtent[0]) for axisExtent in self.getDirectCutoutExtentsArcsec(
+            #     matchExtentforGrism)])
+            # cutoutSize *= astrounits.arcsec
+            wcs = astrowcs.WCS(header=directHeader)
+
+            if self.cutoutSizePixels == 'match':
+                cutoutSize = (self.stampYLimitsArcsec[grism][
+                              1] - self.stampYLimitsArcsec[grism][0]) * astrounits.arcsec
+                stampYLimitsArcsec = (self.stampYLimitsArcsec[grism][0], self.stampYLimitsArcsec[grism][1]) * astrounits.arcsec
+                positionWorldArcsec = (self.catalogueEntries[
+                                        grism].X_WORLD*3600, self.catalogueEntries[grism].Y_WORLD*3600) * astrounits.arcsec
+                cutoutPosition = (positionWorldArcsec[0].to(astrounits.degree), 0.5*(2.0*positionWorldArcsec[1] + stampYLimitsArcsec[0] + stampYLimitsArcsec[1]).to(astrounits.degree))
+                cutoutPosition = wcs.wcs_world2pix(cutoutPosition[0], cutoutPosition[1], 1)
+            else:
+                cutoutSize=self.cutoutSizePixels
+                cutoutPosition=(self.catalogueEntries[
+                              grism].X_IMAGE, self.catalogueEntries[grism].Y_IMAGE)
+
+            cutout=astronddata.Cutout2D(
+                data=directData, position=cutoutPosition, size=cutoutSize, wcs=wcs)
+
+        except astrondutils.NoOverlapError as e:
+            print('Error generating cutout for Field {}, Object {}{}: {}'.format(self.targetPar,
+                                                                                 self.targetObject,
+                                                                                 ', {}'.format(
+                                                                                     dataDescription) if dataDescription is not None else '',
+                                                                                 repr(e)))
+            cutout = None
+
+        except ValueError as e:
+            print('Error generating cutout for Field {}, Object {}{}: {}'.format(self.targetPar,
+                                                                                 self.targetObject,
+                                                                                 ', {}'.format(
+                                                                                     dataDescription) if dataDescription is not None else '',
+                                                                                 repr(e)))
+            cutout = None
+        return cutout
 
     def loadDrizzledStamps(self, targetObject, targetPar, pipelineVersion=6.2):
         # lazy assignment of pipelineVersion, targetPar and targetObject
-        self.targetPar = targetPar
-        self.targetObject = targetObject
-        self.pipelineVersion = pipelineVersion
-        self.stampPaths = {
+        self.targetPar=targetPar
+        self.targetObject=targetObject
+        self.pipelineVersion=pipelineVersion
+        self.stampPaths={
             102: self.drizzledStampPathPattern.format(
                 pipeline_version=self.pipelineVersion,
                 par=self.targetPar,
@@ -193,14 +228,21 @@ class StampPlotter:
         }
 
         for extName in self.stampHdus.keys():
-            self.stampHdus[extName] = {key: (astrofits.getdata(stampPath, ext=(extName, 1), header=True) if os.path.isfile(
+            self.stampHdus[extName]={key: (astrofits.getdata(stampPath, ext=(extName, 1), header=True) if os.path.isfile(
                 stampPath) else None) for key, stampPath in self.stampPaths.items()}
+        wcsObjects={key: self.buildWCSObject(
+            stampHDU[1]) for key, stampHDU in self.stampHdus['SCI'].items()}
+        self.stampYLimitsArcsec={key: wcsObject.wcs_pix2world((0, 0), (0, len(
+            self.stampHdus['SCI'][key][0])), 1)[1] for key, wcsObject in wcsObjects.items()}
 
     def loadDirectCutouts(self, targetObject, targetPar, pipelineVersion=6.2):
-        if self.stampHdus is None:
+        if self.stampHdus['SCI'] is None:
             self.loadDrizzledStamps(targetObject, targetPar, pipelineVersion)
 
-        self.directPaths = {
+        if self.catalogueEntries is None:
+            self.loadCatalogueEntries(targetObject, targetPar, pipelineVersion)
+
+        self.directPaths={
             102: self.directImagePathPattern.format(
                 pipeline_version=self.pipelineVersion,
                 par=self.targetPar,
@@ -211,39 +253,57 @@ class StampPlotter:
                 filter=self.getDirectFilterForGrism(141))
         }
 
-        self.directHdus = {key: (astrofits.getdata(directFilePath, ext=('PRIMARY', 1), header=True) if os.path.isfile(
+        self.directHdus={key: (astrofits.getdata(directFilePath, ext=('SCI', 1), header=True) if os.path.isfile(
             directFilePath) else None) for key, directFilePath in self.directPaths.items()}
-        self.directCutouts = {key: (self.extractDirectCutout(self.directHdus[key][0], self.stampHdus['SCI'][key][1]) if (self.stampHdus[
-                                    'SCI'][key] is not None and self.directHdus[key] is not None) else None) for key, directHdu in self.directHdus.items()}
+        self.directCutoutDetails={key: (self.extractDirectCutout(self.directHdus[key][0], self.directHdus[key][1], key) if (
+            self.directHdus[key] is not None) else None) for key, directHdu in self.directHdus.items()}
+        self.directCutouts = {key: cutout.data for key, cutout in self.directCutoutDetails.items()}
+
+    def loadCatalogueEntries(self, targetObject, targetPar, pipelineVersion=6.2):
+        if self.stampHdus['SCI'] is None:
+            self.loadDrizzledStamps(targetObject, targetPar, pipelineVersion)
+
+        tcl=TextCatLoader()
+
+        self.catalogueEntries={
+            102: tcl.getCatalogueByName(self.cataloguePattern.format(
+                pipeline_version=self.pipelineVersion,
+                par=self.targetPar,
+                filter=self.getDirectFilterForGrism(102))).set_index('NUMBER').loc[targetObject],
+            141: tcl.getCatalogueByName(self.cataloguePattern.format(
+                pipeline_version=self.pipelineVersion,
+                par=self.targetPar,
+                filter=self.getDirectFilterForGrism(141))).set_index('NUMBER').loc[targetObject]
+        }
 
     def getExtractionRange(self, modelData, axis):
         # -- Compute the total sum of model pixel values
-        modelSum = np.sum(modelData)
+        modelSum=np.sum(modelData)
         # -- Compute the projected sum of model pixel values along the specifies axis
-        modelProjection = np.sum(modelData, axis=axis, keepdims=False)
+        modelProjection=np.sum(modelData, axis=axis, keepdims=False)
         # -- Compute the CDF of projected model pixel value sums
-        modelCdf = np.cumsum(modelProjection) / modelSum
+        modelCdf=np.cumsum(modelProjection) / modelSum
         # -- Finally extract the pixel indices in the Y-direction for which the
         #    CDF falls between the desired bounds
-        rangePixels = np.argwhere((modelCdf > 0.01) & ~(modelCdf > 0.99))
+        rangePixels=np.argwhere((modelCdf > 0.01) & ~(modelCdf > 0.99))
         # -- Increment the first and last values of the extracted indices and
         #    use these as the extraction bounds
-        rangePixelBounds = (rangePixels[0][0] + 1, rangePixels[-1][0] + 1)
+        rangePixelBounds=(rangePixels[0][0] + 1, rangePixels[-1][0] + 1)
         return (rangePixelBounds, rangePixels)
 
     def getTrimmedStampData(self, data, modelData, contamData, grism, wcs=None):
         # - Determine appropriate range for final image from MOD extension
         # modelData = self.stampHdus['MOD'][0]
-        yBounds, pixelsInYBounds = self.getExtractionRange(modelData, 1)
-        xBounds, pixelsInXBounds = self.getExtractionRange(modelData, 0)
+        yBounds, pixelsInYBounds=self.getExtractionRange(modelData, 1)
+        xBounds, pixelsInXBounds=self.getExtractionRange(modelData, 0)
 
-        yMidPoint = 0.5 * (yBounds[0] + yBounds[1])
-        yExtent = 5 * (yBounds[1] - yBounds[0])
+        yMidPoint=0.5 * (yBounds[0] + yBounds[1])
+        yExtent=5 * (yBounds[1] - yBounds[0])
 
-        yRange = (int(np.floor(yMidPoint - 0.5 * yExtent)),
+        yRange=(int(np.floor(yMidPoint - 0.5 * yExtent)),
                   int(np.ceil(yMidPoint + 0.5 * yExtent)))
 
-        trimmedData = astrondutils.Cutout2D(data=data,
+        trimmedData=astrondutils.Cutout2D(data=data,
                                             wcs=wcs,
                                             position=(
                                                 0.5 * (xBounds[0] + xBounds[1]), yMidPoint),
@@ -251,7 +311,7 @@ class StampPlotter:
                                                   1] - xBounds[0]),
                                             mode='trim')
 
-        trimmedContamData = astrondutils.Cutout2D(data=contamData,
+        trimmedContamData=astrondutils.Cutout2D(data=contamData,
                                                   wcs=wcs,
                                                   position=(
                                                       0.5 * (xBounds[0] + xBounds[1]), yMidPoint),
@@ -259,7 +319,7 @@ class StampPlotter:
                                                       1] - xBounds[0]),
                                                   mode='trim')
 
-        trimmedModelData = astrondutils.Cutout2D(data=modelData,
+        trimmedModelData=astrondutils.Cutout2D(data=modelData,
                                                  wcs=wcs,
                                                  position=(
                                                      0.5 * (xBounds[0] + xBounds[1]), yMidPoint),
@@ -267,9 +327,9 @@ class StampPlotter:
                                                      1] - xBounds[0]),
                                                  mode='trim')
 
-        stampHeader = self.stampHdus['SCI'][grism][1]
+        stampHeader=self.stampHdus['SCI'][grism][1]
 
-        modelRectangle = mplpatches.Rectangle(xy=(xBounds[0] - stampHeader['CRPIX2'],
+        modelRectangle=mplpatches.Rectangle(xy=(xBounds[0] - stampHeader['CRPIX2'],
                                                   yBounds[0] - stampHeader['CRPIX1'] + 0.5 * (yBounds[1] - yBounds[0])),
                                               height=1.5 *
                                               (yBounds[1] - yBounds[0]),
@@ -289,7 +349,7 @@ class StampPlotter:
 
     def buildWCSObject(self, stampHeader):
         # set up WCS object
-        wcsObject = astrowcs.WCS(stampHeader)
+        wcsObject=astrowcs.WCS(stampHeader)
         # hack to undo default behaviour of transformation of wavelength to
         # metres
         wcsObject.wcs.cdelt[0] *= 1e10
@@ -298,18 +358,18 @@ class StampPlotter:
 
     def processRawZerothOrders(self, rawZerothOrders, grism, wcsObject):
         # operate on a copy of the parsed region data
-        zerothOrders = copy.deepcopy(rawZerothOrders[grism])
-        processedZerothOrders = []
-        processedZerothOrdersComments = []
+        zerothOrders=copy.deepcopy(rawZerothOrders[grism])
+        processedZerothOrders=[]
+        processedZerothOrdersComments=[]
 
-        drizzledStampScienceHeader = self.stampHdus['SCI'][grism][1]
+        drizzledStampScienceHeader=self.stampHdus['SCI'][grism][1]
         print(repr(drizzledStampScienceHeader))
         for region in zerothOrders:
-            stampReferencePoint = (drizzledStampScienceHeader[
+            stampReferencePoint=(drizzledStampScienceHeader[
                                    'RREFPNTX'], drizzledStampScienceHeader['RREFPNTY'])
-            imageReferencePoint = (drizzledStampScienceHeader[
+            imageReferencePoint=(drizzledStampScienceHeader[
                                    'REFPNTX'], drizzledStampScienceHeader['REFPNTY'])
-            drizzledStampBBoxCoordinates = ((drizzledStampScienceHeader['BB0X'], drizzledStampScienceHeader['BB0Y']),
+            drizzledStampBBoxCoordinates=((drizzledStampScienceHeader['BB0X'], drizzledStampScienceHeader['BB0Y']),
                                             (drizzledStampScienceHeader['BB1X'], drizzledStampScienceHeader['BB1Y']))
             # At this stage, discard any regions that do not fall within the
             # stamp
@@ -334,15 +394,15 @@ class StampPlotter:
 
                 # Apply the drizzle corrections as specified in:
                 # http://adsabs.harvard.edu/abs/2005ASPC..347..138K
-                correctedX = drizzledStampScienceHeader['D001OUXC'] + (drizzledStampScienceHeader['DRZ00'] + drizzledStampScienceHeader['DRZ01'] * (region.coord_list[
+                correctedX=drizzledStampScienceHeader['D001OUXC'] + (drizzledStampScienceHeader['DRZ00'] + drizzledStampScienceHeader['DRZ01'] * (region.coord_list[
                                                                        0] - drizzledStampScienceHeader['D001INXC']) + drizzledStampScienceHeader['DRZ02'] * (region.coord_list[1] - drizzledStampScienceHeader['D001INYC']))
-                correctedY = drizzledStampScienceHeader['D001OUYC'] + (drizzledStampScienceHeader['DRZ10'] + drizzledStampScienceHeader['DRZ11'] * (region.coord_list[
+                correctedY=drizzledStampScienceHeader['D001OUYC'] + (drizzledStampScienceHeader['DRZ10'] + drizzledStampScienceHeader['DRZ11'] * (region.coord_list[
                                                                        0] - drizzledStampScienceHeader['D001INXC']) + drizzledStampScienceHeader['DRZ12'] * (region.coord_list[1] - drizzledStampScienceHeader['D001INYC']))
 
                 # There is no need to reapply the 1 pixel offset since this is handled by the wcs_pix2world call
                 # processing that happens later
-                region.coord_list[0] = correctedX
-                region.coord_list[1] = correctedY
+                region.coord_list[0]=correctedX
+                region.coord_list[1]=correctedY
 
                 region.coord_list[0] += stampReferencePoint[0]
                 region.coord_list[1] += stampReferencePoint[1]
@@ -358,13 +418,13 @@ class StampPlotter:
                 processedZerothOrdersComments.append('')
 
         # Convert from plain list to ShapeList
-        processedZerothOrders = pyregion.ShapeList(
+        processedZerothOrders=pyregion.ShapeList(
             processedZerothOrders, processedZerothOrdersComments)
         del zerothOrders
         return processedZerothOrders
 
     def plotZerothOrders(self, zerothOrderData, targetAxes, grism, wcsObject):
-        regionGraphics = self.processRawZerothOrders(
+        regionGraphics=self.processRawZerothOrders(
             zerothOrderData, grism, wcsObject).get_mpl_patches_texts()
         for regionGraphic in regionGraphics[0]:
             regionGraphic.set_edgecolor('r')
@@ -381,15 +441,15 @@ class StampPlotter:
                            titlePrefix='',
                            titleSuffix=''):
         if self.stampHdus[extName] is not None:
-            allSubPlotAxes = []
+            allSubPlotAxes=[]
             if gridSpecs is None:
                 mplplot.figure(figsize=(10, 5))
             for stampIndex, (grism, hduData) in enumerate(self.stampHdus[extName].items()):
                 if hduData is None:
                     if gridSpecs is None:
-                        subplotAxes = mplplot.subplot(2, 1, stampIndex + 1)
+                        subplotAxes=mplplot.subplot(2, 1, stampIndex + 1)
                     else:
-                        subplotAxes = mplplot.subplot(gridSpecs[stampIndex])
+                        subplotAxes=mplplot.subplot(gridSpecs[stampIndex])
                     allSubPlotAxes.append(subplotAxes)
                     subplotAxes.text(0.5,
                                      0.5,
@@ -401,9 +461,9 @@ class StampPlotter:
                     continue
                 if np.all(hduData[0] < 0):
                     if gridSpecs is None:
-                        subplotAxes = mplplot.subplot(2, 1, stampIndex + 1)
+                        subplotAxes=mplplot.subplot(2, 1, stampIndex + 1)
                     else:
-                        subplotAxes = mplplot.subplot(gridSpecs[stampIndex])
+                        subplotAxes=mplplot.subplot(gridSpecs[stampIndex])
                     subplotAxes.text(0.5,
                                      0.5,
                                      'Field {}, Object {}:\nNO NONZERO DATA AVAILABLE.'.format(self.targetPar,
@@ -412,51 +472,53 @@ class StampPlotter:
                                      fontsize='large',
                                      transform=subplotAxes.transAxes)
                     continue
-                stampHeader = hduData[1]
-                stampData = hduData[0]
+                stampHeader=hduData[1]
+                stampData=hduData[0]
 
-                wcsObject = None
+                wcsObject=None
 
                 if applyWCS:
-                    wcsObject = self.buildWCSObject(stampHeader)
-                    wavelengthUnit = r'${\rm {\AA}}$'
+                    wcsObject=self.buildWCSObject(stampHeader)
+                    wavelengthUnit=r'${\rm {\AA}}$'
                     # wavelengthUnit = 'm'
                     # leave X-dispersion in arsecond units
-                    xDispUnit = wcsObject.wcs.cunit[1]
+                    xDispUnit=wcsObject.wcs.cunit[1]
                 else:
-                    wavelengthUnit = xDispUnit = 'Pixel'
+                    wavelengthUnit=xDispUnit='Pixel'
                 # construct a normalization handler for the image
 
-                cutoutData = stampData
-                modelData = self.stampHdus['MOD'][grism][0]
-                cutoutModel = modelData
-                contamData = self.stampHdus['CON'][grism][0]
-                cutoutContam = contamData
-                modelRect = None
+                cutoutData=stampData
+                modelData=self.stampHdus['MOD'][grism][0]
+                cutoutModel=modelData
+                contamData=self.stampHdus['CON'][grism][0]
+                cutoutContam=contamData
+                modelRect=None
                 if self.doTrimBorderPixels:
-                    cutoutData, cutoutModel, cutoutContam, modelRect = self.getTrimmedStampData(
+                    cutoutData, cutoutModel, cutoutContam, modelRect=self.getTrimmedStampData(
                         stampData, modelData, contamData, grism, wcs=wcsObject)
-                    stampData = cutoutData.data
-                    wcsObject = cutoutData.wcs
+                    stampData=cutoutData.data
+                    wcsObject=cutoutData.wcs
+                    self.stampYLimitsArcsec[grism]=wcsObject.wcs_pix2world(
+                        (0, 0), (0, len(stampData)), 1)[1]
 
                 if self.useOptimalZScaleForStamp:
-                    (vMin, vMax), interval = self.computeDefaultZRange(
+                    (vMin, vMax), interval=self.computeDefaultZRange(
                         stampData, cutoutContam)
-                    norm = astromplnorm.ImageNormalize(stampData,
+                    norm=astromplnorm.ImageNormalize(stampData,
                                                        interval=interval,
                                                        stretch=self.stretchModel(
                                                            self, None, stampData[cutoutModel > 0]))
                 else:
-                    norm = astromplnorm.ImageNormalize(stampData,
+                    norm=astromplnorm.ImageNormalize(stampData,
                                                        interval=self.stretchInterval,
                                                        stretch=self.stretchModel(
                                                            self, None, stampData[cutoutModel > 0]))
 
                 if gridSpecs is None:
-                    subplotAxes = mplplot.subplot(
+                    subplotAxes=mplplot.subplot(
                         2, 1, stampIndex + 1, projection=wcsObject)
                 else:
-                    subplotAxes = mplplot.subplot(
+                    subplotAxes=mplplot.subplot(
                         gridSpecs[stampIndex], projection=wcsObject)
 
                 # Force stamps to plot within full wavelength range.
@@ -512,14 +574,14 @@ class StampPlotter:
 
     def plotDirectCutouts(self, savePath=None, colourMap='viridis', gridSpecs=None):
         if self.directCutouts is not None:
-            allSubPlotAxes = []
+            allSubPlotAxes=[]
             if gridSpecs is None:
                 mplplot.figure(figsize=(10, 5))
             for stampIndex, (grism, cutoutData) in enumerate(self.directCutouts.items()):
                 if gridSpecs is None:
-                    subplotAxes = mplplot.subplot(2, 1, stampIndex + 1)
+                    subplotAxes=mplplot.subplot(2, 1, stampIndex + 1)
                 else:
-                    subplotAxes = mplplot.subplot(gridSpecs[stampIndex])
+                    subplotAxes=mplplot.subplot(gridSpecs[stampIndex])
 
                 allSubPlotAxes.append(subplotAxes)
 
@@ -549,14 +611,14 @@ class StampPlotter:
                     continue
 
                 if self.useOptimalZScaleForDirectCutout:
-                    (vMin, vMax), interval = self.computeDefaultZRange(
+                    (vMin, vMax), interval=self.computeDefaultZRange(
                         cutoutData, np.zeros_like(cutoutData))
-                    norm = astromplnorm.ImageNormalize(cutoutData,
+                    norm=astromplnorm.ImageNormalize(cutoutData,
                                                        interval=interval,
                                                        stretch=self.stretchModel(
                                                            self, None, cutoutData))
                 else:
-                    norm = astromplnorm.ImageNormalize(cutoutData,
+                    norm=astromplnorm.ImageNormalize(cutoutData,
                                                        interval=astrovis.AsymmetricPercentileInterval(
                                                            0, 99.5),
                                                        stretch=astrovis.LinearStretch(),
@@ -575,18 +637,12 @@ class StampPlotter:
                                                                                          self.getDirectFilterForGrism(
                                                                                              grism),
                                                                                          grism))
-                arcsecYAxis = subplotAxes.twinx()
-                self.directCutoutExtentsArcsec[grism] = (tuple((np.array(subplotAxes.get_xlim()) - 0.5 *
-                                                                np.sum(subplotAxes.get_xlim())) * self.directHdus[grism][1]['IDCSCALE']),
-                                                         tuple((np.array(subplotAxes.get_ylim()) - 0.5 *
-                                                                np.sum(subplotAxes.get_ylim())) * self.directHdus[grism][1]['IDCSCALE']))
-                if self.verboseOutput:
-                    print(grism, self.getDirectCutoutExtentsArcsec(grism))
-                    print(subplotAxes.get_ylim(),
-                          np.array(subplotAxes.get_ylim()),
-                          np.array(subplotAxes.get_ylim()) *
-                          self.directHdus[grism][1]['IDCSCALE'],
-                          np.array(subplotAxes.get_ylim()) * self.directHdus[grism][1]['IDCSCALE'])
+                arcsecYAxis=subplotAxes.twinx()
+                pixScales=astrowcs.utils.proj_plane_pixel_scales(
+                    astrowcs.WCS(self.directHdus[grism][1]))
+                self.directCutoutExtentsArcsec[grism]=(tuple((np.array(subplotAxes.get_xlim()) - 0.5 *
+                                                                np.sum(subplotAxes.get_xlim())) * pixScales[0] * 3600),
+                                                         self.stampYLimitsArcsec[grism])
 
                 arcsecYAxis.set_ylim(
                     *self.getDirectCutoutExtentsArcsec(grism)[1])
@@ -620,30 +676,30 @@ class StampPlotter:
                               matchExtentforGrism=141):
         if dataHdu is not None:
             try:
-                cutoutSize = sizeArcsec if sizeArcsec is not None else tuple([(axisExtent[1] - axisExtent[0]) for axisExtent in self.getDirectCutoutExtentsArcsec(
+                cutoutSize=sizeArcsec if sizeArcsec is not None else tuple([(axisExtent[1] - axisExtent[0]) for axisExtent in self.getDirectCutoutExtentsArcsec(
                     matchExtentforGrism)])
                 cutoutSize *= astrounits.arcsec
-                wcs = astrowcs.WCS(header=dataHdu.header)
-                cutout = astronddata.Cutout2D(
+                wcs=astrowcs.WCS(header=dataHdu.header)
+                cutout=astronddata.Cutout2D(
                     data=dataHdu.data, position=position, size=cutoutSize, wcs=wcs)
 
-                cutoutData = cutout.data
+                cutoutData=cutout.data
             except astrondutils.NoOverlapError as e:
                 print('Error generating cutout for Field {}, Object {}{}: {}'.format(self.targetPar,
                                                                                      self.targetObject,
                                                                                      ', {}'.format(
                                                                                          dataDescription) if dataDescription is not None else '',
                                                                                      repr(e)))
-                cutoutData = None
+                cutoutData=None
             except ValueError as e:
                 print('Error generating cutout for Field {}, Object {}{}: {}'.format(self.targetPar,
                                                                                      self.targetObject,
                                                                                      ', {}'.format(
                                                                                          dataDescription) if dataDescription is not None else '',
                                                                                      repr(e)))
-                cutoutData = None
+                cutoutData=None
 
-        subplotAxes = mplplot.subplot(gridSpecs)
+        subplotAxes=mplplot.subplot(gridSpecs)
 
         if dataHdu is None or cutoutData is None or cutoutData.size == 0:
             subplotAxes.text(0.5,
@@ -674,14 +730,14 @@ class StampPlotter:
             return subplotAxes
 
         if self.useOptimalZScaleForDirectCutout:
-            (vMin, vMax), interval = self.computeDefaultZRange(
+            (vMin, vMax), interval=self.computeDefaultZRange(
                 cutoutData, np.zeros_like(cutoutData))
-            norm = astromplnorm.ImageNormalize(cutoutData,
+            norm=astromplnorm.ImageNormalize(cutoutData,
                                                interval=interval,
                                                stretch=self.stretchModel(
                                                    self, None, cutoutData))
         else:
-            norm = astromplnorm.ImageNormalize(cutoutData,
+            norm=astromplnorm.ImageNormalize(cutoutData,
                                                interval=astrovis.AsymmetricPercentileInterval(
                                                    0, 99.5),
                                                stretch=astrovis.LinearStretch(),
@@ -698,8 +754,8 @@ class StampPlotter:
         mplplot.title('Field {}, Object {}:\nDirect cutout {}'.format(self.targetPar,
                                                                       self.targetObject,
                                                                       dataDescription if dataDescription is not None else ''))
-        arcsecYAxis = subplotAxes.twinx()
-        # print(cutoutSize.value, (cutoutSize.value - 0.5*np.sum(cutoutSize.value)))
+        arcsecYAxis=subplotAxes.twinx()
+
         arcsecYAxis.set_ylim(-0.5 *
                              cutoutSize.value[1], 0.5 * cutoutSize.value[1])
 
@@ -740,7 +796,7 @@ class StampPlotter:
                 'The loadDirectCutouts(...) method must be called before direct cutouts can be returned.')
 
     def getThresholdedDirectCutout(self, grism):
-        skyKeyword = 'MDRIZSKY'
+        skyKeyword='MDRIZSKY'
         if self.directHdus is not None:
             return self.directHdus[grism][1][skyKeyword]
         else:
@@ -749,7 +805,7 @@ class StampPlotter:
     def makeStandardGridSpecForDrizzledStamps(self):
         # generate a standard grid specification that includes positions for
         # the stamp imagegridSpec
-        fullGridSpec = mplgs.GridSpec(
+        fullGridSpec=mplgs.GridSpec(
             3, 2, width_ratios=[4, 1], height_ratios=[4, 1, 1])
         # return the portion of the grid specification into which the stamps
         # should be plotted.
@@ -758,7 +814,7 @@ class StampPlotter:
     def makeStandardGridSpecForDirectCutouts(self):
         # generate a standard grid specification that includes positions for
         # the stamp imagegridSpec
-        fullGridSpec = mplgs.GridSpec(
+        fullGridSpec=mplgs.GridSpec(
             3, 2, width_ratios=[4, 1], height_ratios=[4, 1, 1])
         # return the portion of the grid specification into which the stamps
         # should be plotted.
@@ -768,26 +824,26 @@ class StampPlotter:
                              plottableData,
                              contaminationMap,
                              clipLevels=(5, 3)):
-        contamStdDev = np.std(contaminationMap)
-        contamThreshold = np.percentile(contaminationMap, 70)
+        contamStdDev=np.std(contaminationMap)
+        contamThreshold=np.percentile(contaminationMap, 70)
         # This percentile can be zero for targets with effectively zero
         # contamination in such cases, fall back to the mean contamination
         # level
-        contamThreshold = np.average(
+        contamThreshold=np.average(
             contaminationMap) if contamThreshold <= 0 else contamThreshold
 
-        selectionMask = np.where(
+        selectionMask=np.where(
             contamStdDev > 0, contaminationMap < contamThreshold, np.ones_like(plottableData, dtype=int))
 
-        maskSum = np.sum(selectionMask)
+        maskSum=np.sum(selectionMask)
         if maskSum <= 0:
             raise UserWarning('In computeOptimalZRange: Sum of selection mask is zero or less ({mask_sum}, {contam_std_dev}, {contam_threshold}, {mean_contam})!'.format(
                 mask_sum=maskSum, contam_std_dev=contamStdDev,
                 contam_threshold=contamThreshold,
                 mean_contam=np.average(contaminationMap)))
 
-        normalizationInterval = astrovis.ZScaleInterval()
-        vmin, vmax = normalizationInterval.get_limits(
+        normalizationInterval=astrovis.ZScaleInterval()
+        vmin, vmax=normalizationInterval.get_limits(
             plottableData[selectionMask])
 
         return (vmin, vmax), normalizationInterval
